@@ -25,7 +25,7 @@ struct InputParameters {
 
   /** CTR with default values: default geometry, primary and event configuirations (see below) with
     * pre-generated data files expected at `../data/hepem_data` relative to the `HepEmShow` executable.*/
-  InputParameters() : fG4HepEmDataFile("../data/hepem_data"), fRunVerbosity(1), fThreshold(0.1) {}  //FIX
+  InputParameters() : fG4HepEmDataFile("../data/hepem_data"), fRunVerbosity(1), fThreshold(0.1), fThreshold2(-1.) {}  //FIX
 
 
   /** The geometry related input arguments.*/

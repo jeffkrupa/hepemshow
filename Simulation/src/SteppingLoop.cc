@@ -151,13 +151,15 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
 
   // keep tracking while the kinetic energy drops to zero (i.e. e-/e+ lose all its energy; e+ annihilates)
   // unless the track is going out of the Calorimeter
+  //bool stop_tracking = false;
   while (theTrack->GetEKin() > 0.0) {
     if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
     lastDirection = theTrack->GetDirection()[0];  //FIX
     if (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
     {
       theTrack->SetDirection(stop_grad(theTrack->GetDirection()[0]), stop_grad(theTrack->GetDirection()[1]), stop_grad(theTrack->GetDirection()[2]));
-      theTrack->SetPosition(stop_grad(theTrack->GetPosition()[0]), stop_grad(theTrack->GetPosition()[1]), stop_grad(theTrack->GetPosition()[2]));
+      theTrack->SetPosition( stop_grad(theTrack->GetPosition()[0]),  stop_grad(theTrack->GetPosition()[1]),  stop_grad(theTrack->GetPosition()[2]));
+      //stop_tracking = true;
     }
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
