@@ -19,16 +19,26 @@
 #include "Geometry.hh"
 #include "Box.hh"
 #include "Results.hh"
+#include <fstream>
+#include <iomanip>
 
+//#define DEBUG
+//#define APPLYFIX
 template<typename Expr>
 inline G4double stop_grad(const Expr& x) {
   //return G4double(x);
   return G4double(GET_VALUE(x));
 }
 
-static std::ofstream debugFile("electron_debug.csv");
+static std::ofstream debugFile("debug.csv");
 static bool debugFileInitialized = [](){
-  debugFile << "step,charge,trackID,parentID,localX,localX_dot,localY,localY_dot,localZ,localZ_dot,globalX,globalX_dot,globalY,globalY_dot,globalZ,globalZ_dot,distToBoundary,distToBoundary_dot,safety,safety_dot,preStepSafety,preStepSafety_dot,distToPhysics,distToPhysics_dot,stepLength,stepLength_dot,pStepLength,pStepLength_dot,KE,KE_dot,winnerIdx,onBoundary,wasOnBoundary,directionX,directionX_dot,directionY,directionY_dot,directionZ,directionZ_dot\n";
+  debugFile << "step,charge,trackID,parentID,localX,localX_dot,localY,localY_dot,localZ,localZ_dot,"
+               "globalX,globalX_dot,globalY,globalY_dot,globalZ,globalZ_dot,"
+               "distToBoundary,distToBoundary_dot,safety,safety_dot,preStepSafety,preStepSafety_dot,"
+               "distToPhysics,distToPhysics_dot,stepLength,stepLength_dot,pStepLength,pStepLength_dot,"
+               "KE,KE_dot,winnerIdx,onBoundary,wasOnBoundary,directionX,directionX_dot,"
+               "directionY,directionY_dot,directionZ,directionZ_dot\n";
+  debugFile << std::setprecision(17) << std::scientific;
   return true;
 }();
 
@@ -41,7 +51,7 @@ static bool debugFileInitialized = [](){
 //       to boundary as for sure the step will end up far from the boundaries.
 //       But here we have a simplified gometry and navigation....
 
-void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState, TrackStack& theTrackStack, Geometry& theGeometry, Results& theResult, int eventID) {
+void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState, TrackStack& theTrackStack, Geometry& theGeometry, Results& theResult, int eventID, G4double threshold, G4double threshold2) {
   // NOTE: the start tracking procedure (reset the track and the rng) was done
   G4HepEmTrack* theTrack = theTLData.GetPrimaryGammaTrack()->GetTrack();
 
@@ -56,7 +66,22 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
   int  indxLayer     = -1;
   int  indxAbs       = -1;
   G4double  localPosition[3];
+  int  nBackScatter  = 0;  //FIX
+  G4double lastDirection = theTrack->GetDirection()[0];  //FIX
+  bool stop_tracking = false;
   while (theTrack->GetEKin() > 0.0) {
+
+    #ifdef APPLYFIX
+      if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
+      lastDirection = theTrack->GetDirection()[0];  //FIX
+      if (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
+      {
+        theTrack->SetDirection(stop_grad(theTrack->GetDirection()[0]), stop_grad(theTrack->GetDirection()[1]), stop_grad(theTrack->GetDirection()[2]));
+        theTrack->SetPosition( stop_grad(theTrack->GetPosition()[0]),  stop_grad(theTrack->GetPosition()[1]),  stop_grad(theTrack->GetPosition()[2]));
+        stop_tracking = true;
+      }
+    #endif
+    
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
     //       (taking into account the direction and tolerance)
@@ -104,6 +129,91 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       AddTo3Vect(globalPosition, curDirection, stepLength);
       continue;
     }
+
+  {
+    // Optional: if you can get these from your track; otherwise keep -1.
+    int trackID  = theTrack->GetID(); //(if available)
+    int parentID = theTrack->GetParentID(); //(if available)
+
+    G4double charge = GET_VALUE(theTrack->GetCharge());   // often 0 for gamma
+    G4double KE     = GET_VALUE(theTrack->GetEKin());
+
+    // Winner: 0 = boundary, 1 = physics
+    int winnerIdx = (distToPhysics < distToBoundary) ? 1 : 0;
+
+    // Local (returned by CalculateDistanceToOut)
+    G4double lX = GET_VALUE(localPosition[0]);
+    G4double lY = GET_VALUE(localPosition[1]);
+    G4double lZ = GET_VALUE(localPosition[2]);
+
+    // Global (pre-step)
+    G4double gX = GET_VALUE(globalPosition[0]);
+    G4double gY = GET_VALUE(globalPosition[1]);
+    G4double gZ = GET_VALUE(globalPosition[2]);
+
+    // Direction (pre-step)
+    G4double dX = GET_VALUE(curDirection[0]);
+    G4double dY = GET_VALUE(curDirection[1]);
+    G4double dZ = GET_VALUE(curDirection[2]);
+
+    // Safety: here you used `preStepSafety`
+    G4double safety        = GET_VALUE(currentVolume->DistanceToOut(localPosition)); // same as you computed
+    G4double preStepSafVal = GET_VALUE(preStepSafety);
+
+    // Physics/geometry distances and step lengths
+    G4double distB = GET_VALUE(distToBoundary);
+    G4double distP = GET_VALUE(distToPhysics);
+    G4double step  = GET_VALUE(stepLength);
+    G4double pstep = GET_VALUE(stepLength); // gamma: physical == geometric
+
+    // Dots (derivatives) – fill via DOT(...) if your AD type supports it
+    G4double lXdot = GET_DOTVALUE(localPosition[0]);
+    G4double lYdot = GET_DOTVALUE(localPosition[1]);
+    G4double lZdot = GET_DOTVALUE(localPosition[2]);
+
+    G4double gXdot = GET_DOTVALUE(globalPosition[0]);
+    G4double gYdot = GET_DOTVALUE(globalPosition[1]);
+    G4double gZdot = GET_DOTVALUE(globalPosition[2]);
+
+    G4double dXdot = GET_DOTVALUE(curDirection[0]);
+    G4double dYdot = GET_DOTVALUE(curDirection[1]);
+    G4double dZdot = GET_DOTVALUE(curDirection[2]);
+
+    G4double distBdot = GET_DOTVALUE(distToBoundary);
+    G4double distPdot = GET_DOTVALUE(distToPhysics);
+    G4double stepdot  = GET_DOTVALUE(stepLength);
+    G4double pstepdot = GET_DOTVALUE(stepLength); // gamma
+
+    G4double safdot       = GET_DOTVALUE(safety);
+    G4double preSafedot   = GET_DOTVALUE(preStepSafety);
+    G4double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
+
+    #ifdef DEBUG
+      debugFile
+        << numStep << ','
+        << charge << ',' << trackID << ',' << parentID << ','
+        << lX << ',' << lXdot << ','
+        << lY << ',' << lYdot << ','
+        << lZ << ',' << lZdot << ','
+        << gX << ',' << gXdot << ','
+        << gY << ',' << gYdot << ','
+        << gZ << ',' << gZdot << ','
+        << distB << ',' << distBdot << ','
+        << safety << ',' << safdot << ','
+        << preStepSafVal << ',' << preSafedot << ','
+        << distP << ',' << distPdot << ','
+        << step << ',' << stepdot << ','
+        << pstep << ',' << pstepdot << ','
+        << KE << ',' << KEdot << ','
+        << winnerIdx << ',' << (onBoundary ? 1 : 0) << ',' << 0 /* wasOnBoundary not tracked in gamma */ << ','
+        << dX << ',' << dXdot << ','
+        << dY << ',' << dYdot << ','
+        << dZ << ',' << dZdot << '\n';
+    #endif
+  }
+
+
+  
     // move the track to the corresponding post-step point
     AddTo3Vect(globalPosition, curDirection, stepLength);
     // update the geometrical step length (taking the selected)
@@ -151,16 +261,19 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
 
   // keep tracking while the kinetic energy drops to zero (i.e. e-/e+ lose all its energy; e+ annihilates)
   // unless the track is going out of the Calorimeter
-  //bool stop_tracking = false;
+  bool stop_tracking = false;
   while (theTrack->GetEKin() > 0.0) {
-    if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
-    lastDirection = theTrack->GetDirection()[0];  //FIX
-    if (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
-    {
-      theTrack->SetDirection(stop_grad(theTrack->GetDirection()[0]), stop_grad(theTrack->GetDirection()[1]), stop_grad(theTrack->GetDirection()[2]));
-      theTrack->SetPosition( stop_grad(theTrack->GetPosition()[0]),  stop_grad(theTrack->GetPosition()[1]),  stop_grad(theTrack->GetPosition()[2]));
-      //stop_tracking = true;
-    }
+
+    #ifdef APPLYFIX
+      if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
+      lastDirection = theTrack->GetDirection()[0];  //FIX
+      if (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
+      {
+        theTrack->SetDirection(stop_grad(theTrack->GetDirection()[0]), stop_grad(theTrack->GetDirection()[1]), stop_grad(theTrack->GetDirection()[2]));
+        theTrack->SetPosition( stop_grad(theTrack->GetPosition()[0]),  stop_grad(theTrack->GetPosition()[1]),  stop_grad(theTrack->GetPosition()[2]));
+        stop_tracking = true;
+      }
+    #endif
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
     //       (taking into account the direction and tolerance)
@@ -177,9 +290,15 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
     // at the pre-step point: calculate safety and check if on-boundary (use only if we do not know that the
     // previous step ended up on boundary i.e. use only in the very first or pushed steps)
-    localPosition[0] = stop_grad(localPosition[0]);  //FIX
-    localPosition[1] = stop_grad(localPosition[1]);  //FIX
-    localPosition[2] = stop_grad(localPosition[2]);  //FIX
+    #ifdef APPLYFIX
+      localPosition[0] = stop_grad(localPosition[0]);  //FIX
+      localPosition[1] = stop_grad(localPosition[1]);  //FIX
+      localPosition[2] = stop_grad(localPosition[2]);  //FIX
+    #else
+      localPosition[0] = localPosition[0];  //FIX
+      localPosition[1] = localPosition[1];  //FIX
+      localPosition[2] = localPosition[2];  //FIX
+    #endif
     G4double safety   = currentVolume->DistanceToOut(localPosition);
     bool onBoundary = numStep == 0 ? (safety<5.0E-10) : wasOnBoundary;
     const G4double preStepSafety = onBoundary ? 0.0 : safety;
@@ -253,6 +372,85 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     // physical step length stays zero when MSC is not active as physical = geometrical in that case)
     const G4double pStepLength = theMSCData->fTrueStepLength > 0.0 ? theMSCData->fTrueStepLength : stepLength;
 
+    {
+      int trackID  = theTrack->GetID();  //(if available)
+      
+      int parentID = theTrack->GetParentID(); //(if available)
+
+      double charge = GET_VALUE(theTrack->GetCharge());
+      double KE     = GET_VALUE(theTrack->GetEKin());
+
+      int winnerIdx = (distToPhysics < distToBoundary) ? 1 : 0;
+
+      // localPosition here is post "longitudinal" move, but before optional displacement handling above.
+      // If you want *pre-step* locals instead, cache a copy right after CalculateDistanceToOut.
+      double lX = GET_VALUE(localPosition[0]);
+      double lY = GET_VALUE(localPosition[1]);
+      double lZ = GET_VALUE(localPosition[2]);
+
+      double gX = GET_VALUE(globalPosition[0]);
+      double gY = GET_VALUE(globalPosition[1]);
+      double gZ = GET_VALUE(globalPosition[2]);
+
+      double dX = GET_VALUE(curDirection[0]);
+      double dY = GET_VALUE(curDirection[1]);
+      double dZ = GET_VALUE(curDirection[2]);
+
+      double distB = GET_VALUE(distToBoundary);
+      double distP = GET_VALUE(distToPhysics);
+      double step  = GET_VALUE(stepLength);
+      double pstep = GET_VALUE(pStepLength);
+
+      // Safety values available here:
+      double safetyVal      = GET_VALUE(safety);        // computed earlier in this loop
+      double preStepSafVal  = GET_VALUE(preStepSafety); // from your logic
+      int onB               = onBoundary ? 1 : 0;
+      int wasOnB            = wasOnBoundary ? 1 : 0;
+
+      // Dots (derivatives) – wire DOT(...) if available
+      double lXdot = GET_DOTVALUE(localPosition[0]);
+      double lYdot = GET_DOTVALUE(localPosition[1]);
+      double lZdot = GET_DOTVALUE(localPosition[2]);
+
+      double gXdot = GET_DOTVALUE(globalPosition[0]);
+      double gYdot = GET_DOTVALUE(globalPosition[1]);
+      double gZdot = GET_DOTVALUE(globalPosition[2]);
+
+      double dXdot = GET_DOTVALUE(curDirection[0]);
+      double dYdot = GET_DOTVALUE(curDirection[1]);
+      double dZdot = GET_DOTVALUE(curDirection[2]);
+
+      double distBdot = GET_DOTVALUE(distToBoundary);
+      double distPdot = GET_DOTVALUE(distToPhysics);
+      double stepdot  = GET_DOTVALUE(stepLength);
+      double pstepdot = GET_DOTVALUE(pStepLength);
+
+      double safdot       = GET_DOTVALUE(safety);
+      double preSafedot   = GET_DOTVALUE(preStepSafety);
+      double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
+      #ifdef DEBUG
+        debugFile
+          << numStep << ','
+          << charge << ',' << trackID << ',' << parentID << ','
+          << lX << ',' << lXdot << ','
+          << lY << ',' << lYdot << ','
+          << lZ << ',' << lZdot << ','
+          << gX << ',' << gXdot << ','
+          << gY << ',' << gYdot << ','
+          << gZ << ',' << gZdot << ','
+          << distB << ',' << distBdot << ','
+          << safetyVal << ',' << safdot << ','
+          << preStepSafVal << ',' << preSafedot << ','
+          << distP << ',' << distPdot << ','
+          << step << ',' << stepdot << ','
+          << pstep << ',' << pstepdot << ','
+          << KE << ',' << KEdot << ','
+          << winnerIdx << ',' << onB << ',' << wasOnB << ','
+          << dX << ',' << dXdot << ','
+          << dY << ',' << dYdot << ','
+          << dZ << ',' << dZdot << '\n';
+      #endif
+    }
     // get the displacement and check if we need to apply (should not if the energy is zero but ok keep its simply)
     // we apply it if its length is lonegr than a minimum and we are not on boudnry (i.e. the current post-step point)
     if (!onBoundary) {
@@ -268,9 +466,15 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
         // just to be able to compute the safety at that point
         AddTo3Vect(localPosition, orgDirection, stepLength);
         // compute the current post-step point safety and reduce a bit
-        localPosition[0] = stop_grad(localPosition[0]);  //FIX
-        localPosition[1] = stop_grad(localPosition[1]);  //FIX
-        localPosition[2] = stop_grad(localPosition[2]);  //FIX
+        #ifdef APPLYFIX
+          localPosition[0] = stop_grad(localPosition[0]);  //FIX
+          localPosition[1] = stop_grad(localPosition[1]);  //FIX
+          localPosition[2] = stop_grad(localPosition[2]);  //FIX
+        #else
+          localPosition[0] = localPosition[0];  //FIX
+          localPosition[1] = localPosition[1];  //FIX
+          localPosition[2] = localPosition[2];  //FIX
+        #endif
         const G4double postSafety = 0.99*currentVolume->DistanceToOut(localPosition);
         if (postSafety > 0.0 && dispR < postSafety) {
           // far away from boundary: can be applied safely i.e. we won't get to boundary

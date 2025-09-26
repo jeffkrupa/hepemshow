@@ -129,7 +129,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
       //   NOTE: the secondaries, generated during the simulation of the history
       //         of this track, are all inserted into the track stack.
       if (trackType == 0) { // the next track is a gamma
-        SteppingLoop::GammaStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID);
+        SteppingLoop::GammaStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID, threshold, threshold2);
       } else {              // the next track is an e- or e+
         SteppingLoop::ElectronStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID, threshold, threshold2);
       }
