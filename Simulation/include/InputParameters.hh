@@ -36,13 +36,15 @@ struct InputParameters {
       fThicknessAbsorber(2.3),
       fThicknessGap(5.7),
       fThicknessCalo(0),
-      fSizeTransverse(400.0) {}
+      fSizeTransverse(400.0),
+      fAlpha(0.) {}
 
     int    fNumLayers;         ///< number of layers in the calorimeter
     G4double fThicknessAbsorber; ///< absorber thickness along X in [mm]
     G4double fThicknessGap;      ///< gap thickness along X in [mm]
     G4double fThicknessCalo;     ///< calorimeter thickness along X [mm] ONLY if number of layers is zero
     G4double fSizeTransverse;    ///< calorimeter full size along YZ in [mm]
+    G4double fAlpha;
   };
 
 
@@ -82,6 +84,7 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - absorber-thickness    : "     << theParam.fGeometry.fThicknessAbsorber << " [mm]" << std::endl;
   std::cout << "         - gap-thickness         : "     << theParam.fGeometry.fThicknessGap      << " [mm]" << std::endl;
   std::cout << "         - transverse-size       : "     << theParam.fGeometry.fSizeTransverse    << " [mm]" << std::endl;
+  std::cout << "         - beam-angle       : "          << theParam.fGeometry.fAlpha    << " [rad]" << std::endl;
 
   std::cout << "     --- Primary and Event configuration: " << std::endl;
   std::cout << "         - primary-particle      : "     << theParam.fPrimaryAndEvents.fParticleName   << std::endl;
@@ -105,7 +108,7 @@ static struct option options[] = {
   {"absorber-thickness    (in [mm] units)                                 - default: 2.3"    , required_argument, 0, 'a'},
   {"gap-thickness         (in [mm] units)                                 - default: 5.7"    , required_argument, 0, 'g'},
   {"transverse-size       (of the calorimeter in [mm] units)              - default: 400"    , required_argument, 0, 't'},
-
+  {"alpha                 (angle of incidence on beam on detector in [rad] units)     - default: 0"    , required_argument, 0, 'w'},
   {"primary-particle      (possible particle names: e-, e+ and gamma)     - default: e-"     , required_argument, 0, 'p'},
   {"primary-energy        (in [MeV] units)                                - default: 10 000" , required_argument, 0, 'e'},
   {"number-of-events      (number of primary events to simulate)          - default: 1000"   , required_argument, 0, 'n'},
@@ -170,7 +173,7 @@ static inline G4double parseRealInput(const char* arg){
 void GetOpt(int argc, char *argv[], InputParameters& param) {
   while (true) {
     int c, optidx = 0;
-    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:", options, &optidx);
+    c = getopt_long(argc, argv, "hl:a:g:t:w:p:e:n:s:d:v:b:f:k:", options, &optidx);
     if (c == -1)
       break;
     switch (c) {
@@ -190,7 +193,9 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
     case 't':
        param.fGeometry.fSizeTransverse = std::stod(optarg);
        break;
-
+    case 'w':
+       param.fGeometry.fAlpha = std::stod(optarg);
+       break;
     case 'p':
        param.fPrimaryAndEvents.fParticleName = optarg;
        if ( !(param.fPrimaryAndEvents.fParticleName=="e-" || param.fPrimaryAndEvents.fParticleName=="e+" || param.fPrimaryAndEvents.fParticleName=="gamma") ) {

@@ -32,13 +32,21 @@ inline G4double stop_grad(const Expr& x) {
 
 static std::ofstream debugFile("debug.csv");
 static bool debugFileInitialized = [](){
-  debugFile << "step,charge,trackID,parentID,localX,localX_dot,localY,localY_dot,localZ,localZ_dot,"
+  debugFile << "event,step,charge,trackID,"
+               "globalX,globalX_dot,globalY,globalY_dot,globalZ,globalZ_dot,"
+               "distToBoundary,distToBoundary_dot,preStepSafety,preStepSafety_dot,"
+               "distToPhysics,distToPhysics_dot,stepLength,stepLength_dot,pStepLength,pStepLength_dot,"
+               "KE,KE_dot,onBoundary,wasOnBoundary,directionX,directionX_dot,"
+               "directionY,directionY_dot,directionZ,directionZ_dot,edep,edep_dot,indxLayer\n";
+  debugFile << std::setprecision(6) << std::scientific;
+
+  /*debugFile << "event, step,charge,trackID,parentID,localX,localX_dot,localY,localY_dot,localZ,localZ_dot,"
                "globalX,globalX_dot,globalY,globalY_dot,globalZ,globalZ_dot,"
                "distToBoundary,distToBoundary_dot,safety,safety_dot,preStepSafety,preStepSafety_dot,"
                "distToPhysics,distToPhysics_dot,stepLength,stepLength_dot,pStepLength,pStepLength_dot,"
                "KE,KE_dot,winnerIdx,onBoundary,wasOnBoundary,directionX,directionX_dot,"
-               "directionY,directionY_dot,directionZ,directionZ_dot\n";
-  debugFile << std::setprecision(17) << std::scientific;
+               "directionY,directionY_dot,directionZ,directionZ_dot,edep,edep_dot,indxLayer,blAxis,blFaceSign,r_face,cosAxis\n";
+  debugFile << std::setprecision(17) << std::scientific;*/
   return true;
 }();
 
@@ -130,6 +138,70 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       continue;
     }
 
+    // ---- after you computed distToBoundary, with pre-step locals in hand ----
+    auto pos_over = [](double delta, double v, double tiny){ return (v> tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+    auto neg_over = [](double delta, double v, double tiny){ return (v<-tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+
+    const double tiny = 1e-12;
+
+    // Use PRE-STEP local position/direction here:
+    const double x0 = GET_VALUE(localPosition[0]);
+    const double y0 = GET_VALUE(localPosition[1]);
+    const double z0 = GET_VALUE(localPosition[2]);
+    const double vx = GET_VALUE(curDirection[0]);
+    const double vy = GET_VALUE(curDirection[1]);
+    const double vz = GET_VALUE(curDirection[2]);
+
+    // Half-sizes of the current Box (mm). If you have them on currentVolume, read from there:
+    const double Hx = 25.;
+    const double Hy = 200.;
+    const double Hz = 200.;
+
+    // Parametric distances to all 6 faces
+    double tXp = pos_over(Hx - x0, vx, tiny);
+    double tXm = neg_over(-Hx - x0, vx, tiny);
+    double tYp = pos_over(Hy - y0, vy, tiny);
+    double tYm = neg_over(-Hy - y0, vy, tiny);
+    double tZp = pos_over(Hz - z0, vz, tiny);
+    double tZm = neg_over(-Hz - z0, vz, tiny);
+
+    // Pick the winner
+    double tvals[6] = {tXp, tXm, tYp, tYm, tZp, tZm};
+    int    which    = 0;
+    double tmin     = tvals[0];
+    for (int i=1;i<6;++i){ if (tvals[i] < tmin) { tmin = tvals[i]; which = i; } }
+
+    // Map to axis/sign
+    int blAxis = -1;       // 0:x,1:y,2:z, -1:none
+    int blFaceSign = 0;    // +1 or -1
+    double v_axis = 0.0;   // component along face normal
+
+    switch (which){
+      case 0: blAxis=0; blFaceSign=+1; v_axis=vx; break; // +X
+      case 1: blAxis=0; blFaceSign=-1; v_axis=vx; break; // -X
+      case 2: blAxis=1; blFaceSign=+1; v_axis=vy; break; // +Y
+      case 3: blAxis=1; blFaceSign=-1; v_axis=vy; break; // -Y
+      case 4: blAxis=2; blFaceSign=+1; v_axis=vz; break; // +Z
+      case 5: blAxis=2; blFaceSign=-1; v_axis=vz; break; // -Z
+    }
+
+    // Consistency check: only trust the face if boundary actually won and matches distToBoundary
+    bool boundaryWon = (distToBoundary < distToPhysics);
+    bool faceMatches = std::isfinite(tmin) &&
+                      (std::abs(tmin - distToBoundary)/std::max(1.0, distToBoundary) < 1e-3);
+
+    // r_face = stepLength_dot * component along the winning face normal (direction is unit in G4)
+    double r_face = GET_DOTVALUE(stepLength) * v_axis;
+
+    // For angle context
+    double vnorm = std::sqrt(vx*vx + vy*vy + vz*vz); if (vnorm==0) vnorm=1.0;
+    double cosAxis = (blAxis==0? std::abs(vx): blAxis==1? std::abs(vy): std::abs(vz)) / vnorm;
+
+    // If physics won or mismatch, mark as none
+    if (!boundaryWon || !faceMatches) {
+      blAxis = -1; blFaceSign = 0; r_face = 0.0; cosAxis = 0.0;
+    }
+
   {
     // Optional: if you can get these from your track; otherwise keep -1.
     int trackID  = theTrack->GetID(); //(if available)
@@ -187,28 +259,36 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     G4double safdot       = GET_DOTVALUE(safety);
     G4double preSafedot   = GET_DOTVALUE(preStepSafety);
     G4double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
+    double edep         = GET_VALUE(theTrack->GetEnergyDeposit());
+    double edepdot      = GET_DOTVALUE(theTrack->GetEnergyDeposit());
+
 
     #ifdef DEBUG
       debugFile
+        << eventID << ','
         << numStep << ','
-        << charge << ',' << trackID << ',' << parentID << ','
-        << lX << ',' << lXdot << ','
-        << lY << ',' << lYdot << ','
-        << lZ << ',' << lZdot << ','
+        << charge << ',' << trackID << ',' //<< parentID << ','
+        //<< lX << ',' << lXdot << ','
+        //<< lY << ',' << lYdot << ','
+        //<< lZ << ',' << lZdot << ','
         << gX << ',' << gXdot << ','
         << gY << ',' << gYdot << ','
         << gZ << ',' << gZdot << ','
         << distB << ',' << distBdot << ','
-        << safety << ',' << safdot << ','
+        //<< safety << ',' << safdot << ','
         << preStepSafVal << ',' << preSafedot << ','
         << distP << ',' << distPdot << ','
         << step << ',' << stepdot << ','
         << pstep << ',' << pstepdot << ','
         << KE << ',' << KEdot << ','
-        << winnerIdx << ',' << (onBoundary ? 1 : 0) << ',' << 0 /* wasOnBoundary not tracked in gamma */ << ','
+        //<< winnerIdx << ',' 
+        << (onBoundary ? 1 : 0) << ',' << 0 /* wasOnBoundary not tracked in gamma */ << ','
         << dX << ',' << dXdot << ','
         << dY << ',' << dYdot << ','
-        << dZ << ',' << dZdot << '\n';
+        << dZ << ',' << dZdot << ','
+        << edep << ',' << edepdot << ',' << indxLayer << '\n';
+        //<< blAxis << ',' << blFaceSign << ',' << r_face << ',' << cosAxis << '\n';
+
     #endif
   }
 
@@ -299,6 +379,20 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
       localPosition[1] = localPosition[1];  //FIX
       localPosition[2] = localPosition[2];  //FIX
     #endif
+
+    // Use PRE-STEP local position/direction here:
+    const double x0 = GET_VALUE(localPosition[0]);
+    const double y0 = GET_VALUE(localPosition[1]);
+    const double z0 = GET_VALUE(localPosition[2]);
+    const double vx = GET_VALUE(curDirection[0]);
+    const double vy = GET_VALUE(curDirection[1]);
+    const double vz = GET_VALUE(curDirection[2]);
+
+    // Half-sizes of the current Box (mm). If you have them on currentVolume, read from there:
+    const double Hx = 25.;
+    const double Hy = 200.;
+    const double Hz = 200.;
+
     G4double safety   = currentVolume->DistanceToOut(localPosition);
     bool onBoundary = numStep == 0 ? (safety<5.0E-10) : wasOnBoundary;
     const G4double preStepSafety = onBoundary ? 0.0 : safety;
@@ -372,85 +466,8 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     // physical step length stays zero when MSC is not active as physical = geometrical in that case)
     const G4double pStepLength = theMSCData->fTrueStepLength > 0.0 ? theMSCData->fTrueStepLength : stepLength;
 
-    {
-      int trackID  = theTrack->GetID();  //(if available)
-      
-      int parentID = theTrack->GetParentID(); //(if available)
 
-      double charge = GET_VALUE(theTrack->GetCharge());
-      double KE     = GET_VALUE(theTrack->GetEKin());
-
-      int winnerIdx = (distToPhysics < distToBoundary) ? 1 : 0;
-
-      // localPosition here is post "longitudinal" move, but before optional displacement handling above.
-      // If you want *pre-step* locals instead, cache a copy right after CalculateDistanceToOut.
-      double lX = GET_VALUE(localPosition[0]);
-      double lY = GET_VALUE(localPosition[1]);
-      double lZ = GET_VALUE(localPosition[2]);
-
-      double gX = GET_VALUE(globalPosition[0]);
-      double gY = GET_VALUE(globalPosition[1]);
-      double gZ = GET_VALUE(globalPosition[2]);
-
-      double dX = GET_VALUE(curDirection[0]);
-      double dY = GET_VALUE(curDirection[1]);
-      double dZ = GET_VALUE(curDirection[2]);
-
-      double distB = GET_VALUE(distToBoundary);
-      double distP = GET_VALUE(distToPhysics);
-      double step  = GET_VALUE(stepLength);
-      double pstep = GET_VALUE(pStepLength);
-
-      // Safety values available here:
-      double safetyVal      = GET_VALUE(safety);        // computed earlier in this loop
-      double preStepSafVal  = GET_VALUE(preStepSafety); // from your logic
-      int onB               = onBoundary ? 1 : 0;
-      int wasOnB            = wasOnBoundary ? 1 : 0;
-
-      // Dots (derivatives) – wire DOT(...) if available
-      double lXdot = GET_DOTVALUE(localPosition[0]);
-      double lYdot = GET_DOTVALUE(localPosition[1]);
-      double lZdot = GET_DOTVALUE(localPosition[2]);
-
-      double gXdot = GET_DOTVALUE(globalPosition[0]);
-      double gYdot = GET_DOTVALUE(globalPosition[1]);
-      double gZdot = GET_DOTVALUE(globalPosition[2]);
-
-      double dXdot = GET_DOTVALUE(curDirection[0]);
-      double dYdot = GET_DOTVALUE(curDirection[1]);
-      double dZdot = GET_DOTVALUE(curDirection[2]);
-
-      double distBdot = GET_DOTVALUE(distToBoundary);
-      double distPdot = GET_DOTVALUE(distToPhysics);
-      double stepdot  = GET_DOTVALUE(stepLength);
-      double pstepdot = GET_DOTVALUE(pStepLength);
-
-      double safdot       = GET_DOTVALUE(safety);
-      double preSafedot   = GET_DOTVALUE(preStepSafety);
-      double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
-      #ifdef DEBUG
-        debugFile
-          << numStep << ','
-          << charge << ',' << trackID << ',' << parentID << ','
-          << lX << ',' << lXdot << ','
-          << lY << ',' << lYdot << ','
-          << lZ << ',' << lZdot << ','
-          << gX << ',' << gXdot << ','
-          << gY << ',' << gYdot << ','
-          << gZ << ',' << gZdot << ','
-          << distB << ',' << distBdot << ','
-          << safetyVal << ',' << safdot << ','
-          << preStepSafVal << ',' << preSafedot << ','
-          << distP << ',' << distPdot << ','
-          << step << ',' << stepdot << ','
-          << pstep << ',' << pstepdot << ','
-          << KE << ',' << KEdot << ','
-          << winnerIdx << ',' << onB << ',' << wasOnB << ','
-          << dX << ',' << dXdot << ','
-          << dY << ',' << dYdot << ','
-          << dZ << ',' << dZdot << '\n';
-      #endif
-    }
+    
     // get the displacement and check if we need to apply (should not if the energy is zero but ok keep its simply)
     // we apply it if its length is lonegr than a minimum and we are not on boudnry (i.e. the current post-step point)
     if (!onBoundary) {
@@ -494,6 +511,304 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
           // }
         }
       }
+
+      {
+
+
+        //add here?
+
+        // ---- after you computed distToBoundary, with pre-step locals in hand ----
+        auto pos_over = [](double delta, double v, double tiny){ return (v> tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+        auto neg_over = [](double delta, double v, double tiny){ return (v<-tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+
+        const double tiny = 1e-12;
+
+
+        // Parametric distances to all 6 faces
+        double tXp = pos_over(Hx - x0, vx, tiny);
+        double tXm = neg_over(-Hx - x0, vx, tiny);
+        double tYp = pos_over(Hy - y0, vy, tiny);
+        double tYm = neg_over(-Hy - y0, vy, tiny);
+        double tZp = pos_over(Hz - z0, vz, tiny);
+        double tZm = neg_over(-Hz - z0, vz, tiny);
+
+        // Pick the winner
+        double tvals[6] = {tXp, tXm, tYp, tYm, tZp, tZm};
+        int    which    = 0;
+        double tmin     = tvals[0];
+        for (int i=1;i<6;++i){ if (tvals[i] < tmin) { tmin = tvals[i]; which = i; } }
+
+        // Map to axis/sign
+        int blAxis = -1;       // 0:x,1:y,2:z, -1:none
+        int blFaceSign = 0;    // +1 or -1
+        double v_axis = 0.0;   // component along face normal
+
+        switch (which){
+          case 0: blAxis=0; blFaceSign=+1; v_axis=vx; break; // +X
+          case 1: blAxis=0; blFaceSign=-1; v_axis=vx; break; // -X
+          case 2: blAxis=1; blFaceSign=+1; v_axis=vy; break; // +Y
+          case 3: blAxis=1; blFaceSign=-1; v_axis=vy; break; // -Y
+          case 4: blAxis=2; blFaceSign=+1; v_axis=vz; break; // +Z
+          case 5: blAxis=2; blFaceSign=-1; v_axis=vz; break; // -Z
+        }
+
+        // Consistency check: only trust the face if boundary actually won and matches distToBoundary
+        bool boundaryWon = (distToBoundary < distToPhysics);
+        bool faceMatches = std::isfinite(tmin) &&
+                          (std::abs(tmin - distToBoundary)/std::max(1.0, distToBoundary) < 1e-1);
+
+        // r_face = stepLength_dot * component along the winning face normal (direction is unit in G4)
+        double r_face = GET_DOTVALUE(stepLength) * v_axis;
+
+        // For angle context
+        double vnorm = std::sqrt(vx*vx + vy*vy + vz*vz); if (vnorm==0) vnorm=1.0;
+        double cosAxis = (blAxis==0? std::abs(vx): blAxis==1? std::abs(vy): std::abs(vz)) / vnorm;
+
+        // If physics won or mismatch, mark as none
+        if (!boundaryWon || !faceMatches) {
+          blAxis = -1; blFaceSign = 0; r_face = 0.0; cosAxis = 0.0;
+        }
+
+      
+        int trackID  = theTrack->GetID();  //(if available)
+        
+        int parentID = theTrack->GetParentID(); //(if available)
+
+        double charge = GET_VALUE(theTrack->GetCharge());
+        double KE     = GET_VALUE(theTrack->GetEKin());
+
+        int winnerIdx = (distToPhysics < distToBoundary) ? 1 : 0;
+
+        // localPosition here is post "longitudinal" move, but before optional displacement handling above.
+        // If you want *pre-step* locals instead, cache a copy right after CalculateDistanceToOut.
+        double lX = GET_VALUE(localPosition[0]);
+        double lY = GET_VALUE(localPosition[1]);
+        double lZ = GET_VALUE(localPosition[2]);
+
+        double gX = GET_VALUE(globalPosition[0]);
+        double gY = GET_VALUE(globalPosition[1]);
+        double gZ = GET_VALUE(globalPosition[2]);
+
+        double dX = GET_VALUE(curDirection[0]);
+        double dY = GET_VALUE(curDirection[1]);
+        double dZ = GET_VALUE(curDirection[2]);
+
+        double distB = GET_VALUE(distToBoundary);
+        double distP = GET_VALUE(distToPhysics);
+        double step  = GET_VALUE(stepLength);
+        double pstep = GET_VALUE(pStepLength);
+
+        // Safety values available here:
+        double safetyVal      = GET_VALUE(safety);        // computed earlier in this loop
+        double preStepSafVal  = GET_VALUE(preStepSafety); // from your logic
+        int onB               = onBoundary ? 1 : 0;
+        int wasOnB            = wasOnBoundary ? 1 : 0;
+
+        // Dots (derivatives) – wire DOT(...) if available
+        double lXdot = GET_DOTVALUE(localPosition[0]);
+        double lYdot = GET_DOTVALUE(localPosition[1]);
+        double lZdot = GET_DOTVALUE(localPosition[2]);
+
+        double gXdot = GET_DOTVALUE(globalPosition[0]);
+        double gYdot = GET_DOTVALUE(globalPosition[1]);
+        double gZdot = GET_DOTVALUE(globalPosition[2]);
+
+        double dXdot = GET_DOTVALUE(curDirection[0]);
+        double dYdot = GET_DOTVALUE(curDirection[1]);
+        double dZdot = GET_DOTVALUE(curDirection[2]);
+
+        double distBdot = GET_DOTVALUE(distToBoundary);
+        double distPdot = GET_DOTVALUE(distToPhysics);
+        double stepdot  = GET_DOTVALUE(stepLength);
+        double pstepdot = GET_DOTVALUE(pStepLength);
+
+        double safdot       = GET_DOTVALUE(safety);
+        double preSafedot   = GET_DOTVALUE(preStepSafety);
+        double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
+        double edep         = GET_VALUE(theTrack->GetEnergyDeposit());
+        double edepdot      = GET_DOTVALUE(theTrack->GetEnergyDeposit());
+
+        #ifdef DEBUG
+          debugFile
+            << eventID << ','
+            << numStep << ','
+            << charge << ',' << trackID << ',' //<< parentID << ','
+            //<< lX << ',' << lXdot << ','
+            //<< lY << ',' << lYdot << ','
+            //<< lZ << ',' << lZdot << ','
+            << gX << ',' << gXdot << ','
+            << gY << ',' << gYdot << ','
+            << gZ << ',' << gZdot << ','
+            << distB << ',' << distBdot << ','
+            //<< safetyVal << ',' << safdot << ','
+            << preStepSafVal << ',' << preSafedot << ','
+            << distP << ',' << distPdot << ','
+            << step << ',' << stepdot << ','
+            << pstep << ',' << pstepdot << ','
+            << KE << ',' << KEdot << ','
+            //<< winnerIdx << ',' 
+            << onB << ',' << wasOnB << ','
+            << dX << ',' << dXdot << ','
+            << dY << ',' << dYdot << ','
+            << dZ << ',' << dZdot << ','
+            << edep << ',' << edepdot << ',' << indxLayer << '\n';
+            //<< blAxis << ',' << blFaceSign << ',' << r_face << ',' << cosAxis << '\n';
+        #endif
+        
+      }
+    }
+    else {
+       // ---- after you computed distToBoundary, with pre-step locals in hand ----
+      auto pos_over = [](double delta, double v, double tiny){ return (v> tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+      auto neg_over = [](double delta, double v, double tiny){ return (v<-tiny) ? (delta / v) : std::numeric_limits<double>::infinity(); };
+
+      const double tiny = 1e-12;
+
+      // Use PRE-STEP local position/direction here:
+      const double x0 = GET_VALUE(localPosition[0]);
+      const double y0 = GET_VALUE(localPosition[1]);
+      const double z0 = GET_VALUE(localPosition[2]);
+      const double vx = GET_VALUE(curDirection[0]);
+      const double vy = GET_VALUE(curDirection[1]);
+      const double vz = GET_VALUE(curDirection[2]);
+
+      // Half-sizes of the current Box (mm). If you have them on currentVolume, read from there:
+      const double Hx = 25.;
+      const double Hy = 200.;
+      const double Hz = 200.;
+
+      // Parametric distances to all 6 faces
+      double tXp = pos_over(Hx - x0, vx, tiny);
+      double tXm = neg_over(-Hx - x0, vx, tiny);
+      double tYp = pos_over(Hy - y0, vy, tiny);
+      double tYm = neg_over(-Hy - y0, vy, tiny);
+      double tZp = pos_over(Hz - z0, vz, tiny);
+      double tZm = neg_over(-Hz - z0, vz, tiny);
+
+      // Pick the winner
+      double tvals[6] = {tXp, tXm, tYp, tYm, tZp, tZm};
+      int    which    = 0;
+      double tmin     = tvals[0];
+      for (int i=1;i<6;++i){ if (tvals[i] < tmin) { tmin = tvals[i]; which = i; } }
+
+      // Map to axis/sign
+      int blAxis = -1;       // 0:x,1:y,2:z, -1:none
+      int blFaceSign = 0;    // +1 or -1
+      double v_axis = 0.0;   // component along face normal
+
+      switch (which){
+        case 0: blAxis=0; blFaceSign=+1; v_axis=vx; break; // +X
+        case 1: blAxis=0; blFaceSign=-1; v_axis=vx; break; // -X
+        case 2: blAxis=1; blFaceSign=+1; v_axis=vy; break; // +Y
+        case 3: blAxis=1; blFaceSign=-1; v_axis=vy; break; // -Y
+        case 4: blAxis=2; blFaceSign=+1; v_axis=vz; break; // +Z
+        case 5: blAxis=2; blFaceSign=-1; v_axis=vz; break; // -Z
+      }
+
+      // Consistency check: only trust the face if boundary actually won and matches distToBoundary
+      bool boundaryWon = (distToBoundary < distToPhysics);
+      bool faceMatches = std::isfinite(tmin) &&
+                        (std::abs(tmin - distToBoundary)/std::max(1.0, distToBoundary) < 1e-1);
+
+      // r_face = stepLength_dot * component along the winning face normal (direction is unit in G4)
+      double r_face = GET_DOTVALUE(stepLength) * v_axis;
+
+      // For angle context
+      double vnorm = std::sqrt(vx*vx + vy*vy + vz*vz); if (vnorm==0) vnorm=1.0;
+      double cosAxis = (blAxis==0? std::abs(vx): blAxis==1? std::abs(vy): std::abs(vz)) / vnorm;
+
+      // If physics won or mismatch, mark as none
+      if (!boundaryWon || !faceMatches) {
+        blAxis = -1; blFaceSign = 0; r_face = 0.0; cosAxis = 0.0;
+      }
+
+      {
+        int trackID  = theTrack->GetID();  //(if available)
+        
+        int parentID = theTrack->GetParentID(); //(if available)
+
+        double charge = GET_VALUE(theTrack->GetCharge());
+        double KE     = GET_VALUE(theTrack->GetEKin());
+
+        int winnerIdx = (distToPhysics < distToBoundary) ? 1 : 0;
+
+        // localPosition here is post "longitudinal" move, but before optional displacement handling above.
+        // If you want *pre-step* locals instead, cache a copy right after CalculateDistanceToOut.
+        double lX = GET_VALUE(localPosition[0]);
+        double lY = GET_VALUE(localPosition[1]);
+        double lZ = GET_VALUE(localPosition[2]);
+
+        double gX = GET_VALUE(globalPosition[0]);
+        double gY = GET_VALUE(globalPosition[1]);
+        double gZ = GET_VALUE(globalPosition[2]);
+
+        double dX = GET_VALUE(curDirection[0]);
+        double dY = GET_VALUE(curDirection[1]);
+        double dZ = GET_VALUE(curDirection[2]);
+
+        double distB = GET_VALUE(distToBoundary);
+        double distP = GET_VALUE(distToPhysics);
+        double step  = GET_VALUE(stepLength);
+        double pstep = GET_VALUE(pStepLength);
+
+        // Safety values available here:
+        double safetyVal      = GET_VALUE(safety);        // computed earlier in this loop
+        double preStepSafVal  = GET_VALUE(preStepSafety); // from your logic
+        int onB               = onBoundary ? 1 : 0;
+        int wasOnB            = wasOnBoundary ? 1 : 0;
+
+        // Dots (derivatives) – wire DOT(...) if available
+        double lXdot = GET_DOTVALUE(localPosition[0]);
+        double lYdot = GET_DOTVALUE(localPosition[1]);
+        double lZdot = GET_DOTVALUE(localPosition[2]);
+
+        double gXdot = GET_DOTVALUE(globalPosition[0]);
+        double gYdot = GET_DOTVALUE(globalPosition[1]);
+        double gZdot = GET_DOTVALUE(globalPosition[2]);
+
+        double dXdot = GET_DOTVALUE(curDirection[0]);
+        double dYdot = GET_DOTVALUE(curDirection[1]);
+        double dZdot = GET_DOTVALUE(curDirection[2]);
+
+        double distBdot = GET_DOTVALUE(distToBoundary);
+        double distPdot = GET_DOTVALUE(distToPhysics);
+        double stepdot  = GET_DOTVALUE(stepLength);
+        double pstepdot = GET_DOTVALUE(pStepLength);
+
+        double safdot       = GET_DOTVALUE(safety);
+        double preSafedot   = GET_DOTVALUE(preStepSafety);
+        double KEdot        = GET_DOTVALUE(theTrack->GetEKin());
+        double edep         = GET_VALUE(theTrack->GetEnergyDeposit());
+        double edepdot      = GET_DOTVALUE(theTrack->GetEnergyDeposit());
+
+        #ifdef DEBUG
+          debugFile
+            << eventID << ','
+            << numStep << ','
+            << charge << ',' << trackID << ',' //<< parentID << ','
+            //<< lX << ',' << lXdot << ','
+            //<< lY << ',' << lYdot << ','
+            //<< lZ << ',' << lZdot << ','
+            << gX << ',' << gXdot << ','
+            << gY << ',' << gYdot << ','
+            << gZ << ',' << gZdot << ','
+            << distB << ',' << distBdot << ','
+            //<< safetyVal << ',' << safdot << ','
+            << preStepSafVal << ',' << preSafedot << ','
+            << distP << ',' << distPdot << ','
+            << step << ',' << stepdot << ','
+            << pstep << ',' << pstepdot << ','
+            << KE << ',' << KEdot << ','
+            //<< winnerIdx << ',' 
+            << onB << ',' << wasOnB << ','
+            << dX << ',' << dXdot << ','
+            << dY << ',' << dYdot << ','
+            << dZ << ',' << dZdot << ','
+            << edep << ',' << edepdot << ',' << indxLayer << '\n';
+            //<< blAxis << ',' << blFaceSign << ',' << r_face << ',' << cosAxis << '\n';
+        #endif
+      }
+
     }
     //
     // stack all secondaries (if any) that has been produced in this step

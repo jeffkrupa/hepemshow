@@ -57,7 +57,7 @@ private:
   /** Method invoked at the beginning of each event by passing the (single) primary track of the event.*/
   static void BeginOfEventAction(Results& theResult, int eventID, const G4HepEmTrack& thePrimaryTrack, Geometry& theGeometry, PrimaryGenerator& thePrimaryGenerator);
   /** Method invoked at the end of each event.*/
-  static void EndOfEventAction(  Results& theResult, int eventID);
+  static void EndOfEventAction(  Results& theResult, int eventID, Geometry& theGeometry);
 
   /** Method invoked before start tracking of a new track (provided as input argument).*/
   static void BeginOfTrackingAction(Results& theResult, G4HepEmTrack& theTrack);

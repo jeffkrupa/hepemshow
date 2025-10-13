@@ -1,5 +1,5 @@
 #include "ad_type.h"
-
+#include "Geometry.hh"
 
 #ifndef RESULTS_HH
 #define RESULTS_HH
@@ -104,6 +104,6 @@ struct Results {
  *
  * Writes the 3 histrograms (mean energy deposit, \f$\gamma\f$ and \f$e^-/e^+\f$ steps per-layer) into files
  * while all the other collected data to the screen.*/
-void WriteResults(struct Results& res, int numEvents=1, int seed=1);
+void WriteResults(struct Results& res, Geometry& theGeometry, int numEvents=1, int seed=1);
 
 #endif // RESULTS_HH

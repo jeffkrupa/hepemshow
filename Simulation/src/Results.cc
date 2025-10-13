@@ -9,7 +9,7 @@
 #include <iomanip>
 #include <fstream>
 
-void WriteResults(struct Results& res, int numEvents, int seed) {
+void WriteResults(struct Results& res, Geometry& theGeometry, int numEvents, int seed) {
   // for the histograms, bring them to be mean per event and write
   const G4double norm = numEvents > 0 ? 1.0/numEvents : 1.0;
   res.fEdepPerLayer.Scale(norm);
@@ -19,7 +19,7 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
   res.fEdepPerLayer.WriteToFile(false);
   std::ofstream edeps("edeps_" + std::to_string(seed));
   //std::ofstream edeps("edeps");
-  for(int i=0; i<50; i++){
+  for(int i=0; i<theGeometry.GetNumLayers(); i++){
      edeps << std::setprecision(14) << res.fEdepPerLayer_Acc[i].getMean() << " " << res.fEdepPerLayer_Acc[i].getMeanSq();
      #if CODI_FORWARD
         edeps << " " << res.fEdepPerLayer_AccD[i].getMean() << " " << res.fEdepPerLayer_AccD[i].getMeanSq();
@@ -57,7 +57,7 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
   std::cout << std::setprecision(6);
   std::cout << " Absorber: mean Edep = " << res.fEdepAbs << " [MeV] and  Std-dev = " << rmsEAbs << " [MeV]"<< std::endl;
   std::cout << " Gap     : mean Edep = " << res.fEdepGap << " [MeV] and  Std-dev = " << rmsEGap << " [MeV]"<< std::endl;
-
+  std::cout << " Number of layers    = " << theGeometry.GetNumLayers() << std::endl;
   std::cout << std::endl;
   std::cout << std::setprecision(14);
   std::cout << " Mean number of gamma       " << res.fNumSecGamma*norm    << std::endl;

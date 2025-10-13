@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
   thePrimaryGenerator.SetKinEnergy(theInputParameters.fPrimaryAndEvents.fParticleEnergy);
   // set primary particle position and direction (should not be changed)
   thePrimaryGenerator.SetPosition(-1, 0.0, 0.0);
-  thePrimaryGenerator.SetDirection(1.0, 0.0, 0.0);
+  thePrimaryGenerator.SetDirection(std::cos(theInputParameters.fGeometry.fAlpha), std::sin(theInputParameters.fGeometry.fAlpha), 0.0);
 
 
   // `Results` encapsulates the data that we record during the simulation
@@ -125,13 +125,13 @@ int main(int argc, char* argv[]) {
   Results theResult;
   theResult.fEdepPerLayer.ReSet("hist_Edep_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
   theResult.fEdepPerLayer_CurrentEvent.ReSet("hist_Edep_PerLayer_CurrentEvent", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
-  theResult.fEdepPerLayer_Acc.resize(50);
+  theResult.fEdepPerLayer_Acc.resize(theGeometry.GetNumLayers()); 
   #ifdef CODI_FORWARD
-    theResult.fEdepPerLayer_AccD.resize(50);
+    theResult.fEdepPerLayer_AccD.resize(theGeometry.GetNumLayers());
   #endif
   #ifdef CODI_REVERSE
     theResult.barEdep.resize(50,0.);
-    for(int i=0; i<50; i++){
+    for(int i=0; i<theGeometry.GetNumLayers(); i++){
        if(i<theInputParameters.barEdep.size()){
           theResult.barEdep[i] = theInputParameters.barEdep[i];
        }
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
 
 
   // here we summarise the results and write them to file (the histograms) or to the screen
-  WriteResults(theResult, theInputParameters.fPrimaryAndEvents.fNumEvents, GET_VALUE(theInputParameters.fPrimaryAndEvents.fRandomSeed));
+  WriteResults(theResult, theGeometry, theInputParameters.fPrimaryAndEvents.fNumEvents, GET_VALUE(theInputParameters.fPrimaryAndEvents.fRandomSeed) );
 
 
   // delete objects

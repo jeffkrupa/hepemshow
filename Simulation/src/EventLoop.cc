@@ -64,7 +64,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     // - the primary track is the very first track in the stack, so obtain one
     //   track reference from the stack and generate one primary into that
     G4HepEmTrack& primaryTrack = theTrackStack.Insert();
-
+    
     // 2. Invoke the beginning of event action (by passing the current primary track)
     BeginOfEventAction(theResult, eventID, primaryTrack, theGeometry, thePrimaryGenerator);
 
@@ -117,10 +117,15 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
       //   calorimeter volume (in the vacuum, pointing to the calorimeter).
       //   Therefore, primaries need to be moved to the calorimeter boundary
       //   (as they point into the calorimeter they will be inside then).
-      if (nextTrack->GetParentID() < 0) {
+      
+      //Commenting this out so i can start the beam wherever i want 
+      /* 
+     if (nextTrack->GetParentID() < 0) {
         G4double* pos = nextTrack->GetPosition();
         pos[0] = theGeometry.GetCaloStartXposition();
       }
+      */
+
       // - invoke the beginning of tracking action before start tracking this track
       BeginOfTrackingAction(theResult, *nextTrack);
       // - call the gamma/electron stepper to simulate the entire history of this
@@ -138,7 +143,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     };
     //
     // 4. Call the end of event action
-    EndOfEventAction(theResult, eventID);
+    EndOfEventAction(theResult, eventID, theGeometry);
     //
     // increase the event ID (i.e. counter of simulated events)
     ++eventID;;
@@ -187,14 +192,14 @@ void EventLoop::BeginOfEventAction(Results& theResult, int eventID, const G4HepE
 
 }
 
-void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
+void EventLoop::EndOfEventAction(Results& theResult, int eventID, Geometry& theGeometry) {
   // propagare the data accunulated during this event to the results
   G4double dum = theResult.fPerEventRes.fEdepAbs;
   theResult.fEdepAbs  += dum;
   theResult.fEdepAbs2 += dum*dum;
 
   theResult.fEdepPerLayer.Add(&theResult.fEdepPerLayer_CurrentEvent);
-  for(int i=0; i<50; i++){
+  for(int i=0; i<theGeometry.GetNumLayers(); i++){
     theResult.fEdepPerLayer_Acc[i].add(GET_VALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
     #if CODI_FORWARD
        theResult.fEdepPerLayer_AccD[i].add(GET_DOTVALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
@@ -228,11 +233,11 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
   theResult.fNumStepsElPos2 += dum*dum;
 
   #ifdef CODI_REVERSE
-    for(int i=0; i<50; i++){
+    for(int i=0; i<theGeometry.GetNumLayers(); i++){
        G4double::getTape().registerOutput(theResult.fEdepPerLayer_CurrentEvent.GetY()[i]);
     }
     G4double::getTape().setPassive();
-    for(int i=0; i<50; i++){
+    for(int i=0; i<theGeomtry.GetNumLayers(); i++){
        theResult.fEdepPerLayer_CurrentEvent.GetY()[i].setGradient(theResult.barEdep[i]);
     }
     G4double::getTape().evaluate();
