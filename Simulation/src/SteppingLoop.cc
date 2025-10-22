@@ -20,6 +20,45 @@
 #include "Box.hh"
 #include "Results.hh"
 
+#include <fstream>
+#include <atomic>
+
+#ifndef MICRO_AUDIT_MAX
+#define MICRO_AUDIT_MAX 2000   // hard cap on lines we'll write
+#endif
+
+const double Ldot_thr   = 5e6;         // tweak to match your scale
+const double Edot_thr   = 5e6;         // idem
+
+
+struct MicroAudit {
+  static std::ofstream& stream() {
+    static std::ofstream s("micro_audit.csv", std::ios::out);
+    static bool inited = false;
+    if (!inited) {
+      s << "event,trackID,parentID,step,layer,winnerIdx,"
+        << "onBoundary,blAxis,"
+        << "gX,gY,gZ,"
+        << "vx,vy,vz,"
+        << "stepLength,stepLength_dot,"
+        << "edep,edep_dot,EKin,EKin_dot,"
+        << "distB,distB_dot,distP,distP_dot\n";
+      inited = true;
+    }
+    return s;
+  }
+  static std::atomic<int>& counter() {
+    static std::atomic<int> c{0};
+    return c;
+  }
+  static void logLine(const std::string& line) {
+    int k = counter().fetch_add(1);
+    if (k < MICRO_AUDIT_MAX) stream() << line << '\n';
+  }
+};
+
+
+
 template<typename Expr>
 inline G4double stop_grad(const Expr& x) {
   //return G4double(x);
@@ -255,6 +294,28 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
 
     // get the displacement and check if we need to apply (should not if the energy is zero but ok keep its simply)
     // we apply it if its length is lonegr than a minimum and we are not on boudnry (i.e. the current post-step point)
+
+
+    bool big_grad = (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
+
+    if(big_grad){
+      std::ostringstream oss;
+      oss.setf(std::ios::scientific);
+      oss.precision(9);
+      oss
+        << eventID << ',' << theTrack->GetID() << ',' << theTrack->GetParentID() << ','
+        << numStep << ',' << indxLayer << ',' << ((distToPhysics < distToBoundary) ? 1 : 0) << ','
+        << (onBoundary ?1:0) << ',' << -1 << ','
+        << theTrack->GetPosition()[0] << ',' << theTrack->GetPosition()[1] << ',' << theTrack->GetPosition()[2] << ','
+        << theTrack->GetDirection()[0] << ',' << theTrack->GetDirection()[1] << ',' << theTrack->GetDirection()[2] << ','
+        << stepLength << ',' << GET_DOTVALUE(stepLength) << ','
+        << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ','
+        << theTrack->GetEKin() << ',' << GET_DOTVALUE(theTrack->GetEKin())<< ','
+        << distToBoundary << ',' << GET_DOTVALUE(distToBoundary) << ',' << distToPhysics << ',' << GET_DOTVALUE(distToPhysics);
+      MicroAudit::logLine(oss.str());
+
+    }
+
     if (!onBoundary) {
       const G4double* displacement    = theMSCData->GetDisplacement();
       const G4double  dLength2        = displacement[0]*displacement[0] + displacement[1]*displacement[1] + displacement[2]*displacement[2];
