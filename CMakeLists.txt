@@ -86,6 +86,11 @@ target_include_directories(HepEmShow
   ${CMAKE_SOURCE_DIR}/Simulation/include/
 )
 
+target_sources(HepEmShow
+  PRIVATE
+    Simulation/src/G4HepEmRandomEngineIO.cc
+)
+
 target_link_libraries(HepEmShow
   G4HepEm::g4HepEmData
   G4HepEm::g4HepEmDataJsonIO

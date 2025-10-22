@@ -48,8 +48,27 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     reportProgress = std::max(1, numEventToSimulate/10);
   }
   //
+  const bool replay_one = false;
+  const bool save_one = true;
+  const int  target_event = 18363;
+  if (replay_one){
+    eventID = target_event;
+    numEventToSimulate = target_event+1;
+  }
+
   // enter to the event loop: generate and simulate as many events as required
   while (eventID < numEventToSimulate) {
+    if (replay_one && eventID == target_event) {
+      std::string filename = "rng_before_" + std::to_string(eventID) + ".bin";
+      theTLData.GetRNGEngine()->LoadStateFromFile(filename);
+      theTLData.GetRNGEngine()->DiscardGauss();   // ensure cache matches a fresh boundary
+    }
+    if (save_one && eventID == target_event){
+      std::string filename = "rng_before_" + std::to_string(eventID) + ".bin";
+      theTLData.GetRNGEngine()->SaveStateToFile(filename);
+    }
+
+
     // report progress if it was rquested
     if ( verbosity > 0 && (eventID+1) % reportProgress == 0) {
       std::cout << "      - starts processing #event = " << (eventID+1) << std::endl;
@@ -142,6 +161,12 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     //
     // increase the event ID (i.e. counter of simulated events)
     ++eventID;;
+
+    // If we only wanted to replay a single event, exit now
+    if (replay_one && eventID > target_event) {
+      break;
+    }
+
   };
   //
   // calculate and report the event processing time
