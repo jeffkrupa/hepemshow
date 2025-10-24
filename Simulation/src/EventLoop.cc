@@ -49,8 +49,10 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
   }
   //
   const bool replay_one = false;
-  const bool save_one = true;
-  const int  target_event = 18363;
+  const bool save_one = false;
+  //const int  target_event = 18363;
+  const int  target_event = 539;
+ 
   if (replay_one){
     eventID = target_event;
     numEventToSimulate = target_event+1;
@@ -76,6 +78,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     //
     // 0. Reset the track ID before each new event such that it starts from zero again.
     theTrackStack.ReSetTrackID();
+    SteppingLoop::ResetDisabledGradients();
     //
     // 1. Generate the primary track of this event:
     // NOTE: each event is assumed to have one primary now just for simplicity
@@ -148,7 +151,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
       //   NOTE: the secondaries, generated during the simulation of the history
       //         of this track, are all inserted into the track stack.
       if (trackType == 0) { // the next track is a gamma
-        SteppingLoop::GammaStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID);
+        SteppingLoop::GammaStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID, threshold, threshold2);
       } else {              // the next track is an e- or e+
         SteppingLoop::ElectronStepper(theTLData, theState, theTrackStack, theGeometry, theResult, eventID, threshold, threshold2);
       }

@@ -25,7 +25,7 @@ struct InputParameters {
 
   /** CTR with default values: default geometry, primary and event configuirations (see below) with
     * pre-generated data files expected at `../data/hepem_data` relative to the `HepEmShow` executable.*/
-  InputParameters() : fG4HepEmDataFile("../data/hepem_data"), fRunVerbosity(1), fThreshold(0.1), fThreshold2(-1.) {}  //FIX
+  InputParameters() : fG4HepEmDataFile("../data/hepem_data"), fRunVerbosity(1), fThreshold(0.1), fThreshold2(-1.), fGradientStopMode(2) {}  //FIX
 
 
   /** The geometry related input arguments.*/
@@ -68,6 +68,7 @@ struct InputParameters {
   int              fRunVerbosity;     ///< level of printout verbosity duing setting up: nothing when < 1.
   G4double fThreshold;        // FIX
   G4double fThreshold2;       // FIX
+  int fGradientStopMode;   ///< 0: keep gradients, 1: stop on current track, 2: stop on track and descendants
   #ifdef CODI_REVERSE
     std::vector<double> barEdep;     ///< Bar values of the energy depositions
   #endif
@@ -94,6 +95,7 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - run-verbosity        : "     << theParam.fRunVerbosity     << std::endl;
   std::cout << "         - threshold            : "     << theParam.fThreshold        << std::endl; //FIX
   std::cout << "         - threshold2           : "     << theParam.fThreshold2       << std::endl; //FIX
+  std::cout << "         - stop-grad-mode       : "     << theParam.fGradientStopMode << std::endl;
 
 }
 
@@ -118,6 +120,7 @@ static struct option options[] = {
   {"run-verbosity         (verbosity of run information: nothing when 0)  - default: 1"      , required_argument, 0, 'v'},
   {"threshold             (FIX: threshold for energy deposition in [MeV]) - default: 0.1"    , required_argument, 0, 'f'},
   {"threshold2            (FIX: threshold for energy deposition in [MeV]) - default:-1.0"    , required_argument, 0, 'k'},
+  {"stop-grad-mode (0:none,1:track,2:track+desc) - default: 2"         , required_argument, 0, 'x'},
   {"help"                                                                                    , no_argument      , 0, 'h'},
   {0, 0, 0, 0}
 };
@@ -170,7 +173,7 @@ static inline G4double parseRealInput(const char* arg){
 void GetOpt(int argc, char *argv[], InputParameters& param) {
   while (true) {
     int c, optidx = 0;
-    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:", options, &optidx);
+    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:x:", options, &optidx);
     if (c == -1)
       break;
     switch (c) {
@@ -190,6 +193,17 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
     case 't':
        param.fGeometry.fSizeTransverse = std::stod(optarg);
        break;
+
+    case 'x': {
+       const int mode = std::stoi(optarg);
+       if (mode < 0 || mode > 2) {
+         std::cerr << "Unsupported stop-grad-mode value: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fGradientStopMode = mode;
+       break;
+     }
 
     case 'p':
        param.fPrimaryAndEvents.fParticleName = optarg;

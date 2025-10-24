@@ -106,7 +106,7 @@ public:
    * @param theResult the data structure that holds all the infomation needs to be collected during the simulation. It might be updated after each simulation step by calling the `SteppingAction` method.
    * @param eventID ID of the currently simulated event, i.e. the one to which the given input \f$\gamma\f$ track belongs to
    */
-  static void GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState, TrackStack& theTrackStack, Geometry& theGeometry, Results& theResult, int eventID);
+  static void GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState, TrackStack& theTrackStack, Geometry& theGeometry, Results& theResult, int eventID, G4double threshold, G4double threshold2);
 
   /** Stepping loop for simulating the entire history of a \f$e^-/e^+\f$ track.
    *
@@ -124,6 +124,17 @@ public:
    */
   static void ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theState, TrackStack& theTrackStack, Geometry& theGeometry, Results& theResult, int eventID, G4double threshold, G4double threshold2);
 
+  /** Clears all bookkeeping related to tracks whose gradients have been disabled. */
+  static void ResetDisabledGradients();
+
+  /** Returns true when the provided track is marked as having its gradient disabled. */
+  static bool IsTrackGradientDisabled(const G4HepEmTrack& track);
+
+  /** Converts the track's current state to plain values and marks its gradient as disabled. */
+  static void DisableTrackGradient(G4HepEmTrack& track);
+
+  /** Selects how gradients are stopped: 0=never, 1=current track, 2=track and descendants. */
+  static void SetGradientStopMode(int mode);
 
 private:
   SteppingLoop() = delete;
