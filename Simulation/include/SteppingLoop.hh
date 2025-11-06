@@ -136,6 +136,9 @@ public:
   /** Selects how gradients are stopped: 0=never, 1=current track, 2=track and descendants. */
   static void SetGradientStopMode(int mode);
 
+  /** Enable or disable the kinetic energy cut and set its threshold in [MeV]. */
+  static void ConfigureKECut(bool enable, G4double threshold);
+
 private:
   SteppingLoop() = delete;
 

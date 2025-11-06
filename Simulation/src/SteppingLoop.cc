@@ -30,9 +30,14 @@
 
 const double Ldot_thr   = 5e6;         // tweak to match your scale
 const double Edot_thr   = 5e6;         // idem
-constexpr double kKEcut = 0.5;
-bool cut_ke = false;
-bool outputall = true;
+
+namespace {
+  G4double kDefaultKECut = 0.5;
+  G4double gKECutValue = kDefaultKECut;
+  bool gEnableKECut = false;
+}
+
+bool outputall = false;
 
 struct MicroAudit {
   static std::ofstream& stream() {
@@ -116,6 +121,18 @@ void SteppingLoop::SetGradientStopMode(int mode) {
   }
 }
 
+void SteppingLoop::ConfigureKECut(bool enable, G4double threshold) {
+  gEnableKECut = enable;
+  if (gEnableKECut) {
+    if (threshold < 0.0) {
+      threshold = 0.0;
+    }
+    gKECutValue = threshold;
+  } else {
+    gKECutValue = kDefaultKECut;
+  }
+}
+
 
 //
 // NOTE: we always calculate the distance to boundary and the pre-step point safety
@@ -153,8 +170,7 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       DisableTrackGradient(*theTrack);
     }
     if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
-    lastDirection = theTrack->GetDirection()[0];  //FIX
-    if (stop_tracking || (nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
+    if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
     {
       DisableTrackGradient(*theTrack);
       stop_tracking = true;
@@ -251,6 +267,7 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     }
     // call the SteppingAction (whenever a step was done in the calorimeter)
     SteppingAction(theResult, *theTrack, currentVolume, stepLength, indxLayer, indxAbs, eventID, numStep);
+    lastDirection = theTrack->GetDirection()[0];  //FIX
 
     ++numStep;
   }
@@ -289,7 +306,7 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
     if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
     lastDirection = theTrack->GetDirection()[0];  //FIX
-    if (stop_tracking || (nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
+    if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
     {
       DisableTrackGradient(*theTrack);
       stop_tracking = true;
@@ -454,7 +471,7 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
 
     SteppingAction(theResult, *theTrack, currentVolume, pStepLength, indxLayer, indxAbs, eventID, numStep);
     wasOnBoundary = onBoundary;
-
+    lastDirection = theTrack->GetDirection()[0];  //FIX
     ++numStep;
   }
 }
@@ -503,7 +520,7 @@ void SteppingLoop::SteppingAction(Results& theResult, const G4HepEmTrack& theTra
   G4double ke = theTrack.GetEKin();
 
   
-  if (cut_ke && (ke < kKEcut)){
+  if (gEnableKECut && (ke < gKECutValue)){
     edep.setGradient(0.);
     const_cast<G4HepEmTrack&>(theTrack).SetEnergyDeposit(edep); // write-back
 

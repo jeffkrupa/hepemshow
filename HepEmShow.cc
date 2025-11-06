@@ -144,6 +144,7 @@ int main(int argc, char* argv[]) {
 
   // here we start the event processing: generate the required number of event and simulte each event.
   SteppingLoop::SetGradientStopMode(theInputParameters.fGradientStopMode);
+  SteppingLoop::ConfigureKECut(theInputParameters.fEnableKECut, theInputParameters.fKECut);
   EventLoop::ProcessEvents(*theTLData, *theState, thePrimaryGenerator, theGeometry, theResult, theInputParameters.fPrimaryAndEvents.fNumEvents, theInputParameters.fRunVerbosity, theInputParameters.fThreshold, theInputParameters.fThreshold2);
 
 
