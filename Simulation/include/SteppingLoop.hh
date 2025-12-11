@@ -26,7 +26,7 @@
  *   are performed on the track
  * - secondary tracks, generated in the given step by a physics interaction (if
  *   any), are insterted into the track stack (by calling the
- *   `SteppingLoop::StackSecondaries(G4HepEmTLData&, TrackStack&, G4HepEmTrack&)`
+ *   `SteppingLoop::StackSecondaries(G4HepEmTLData&, TrackStack&, G4HepEmTrack&, int)`
  *   method)
  * - information (e.g. energy deposit) might be collected at the end of each
  *   simulation step (by calling the `SteppingLoop::SteppingAction(Results&,
@@ -147,8 +147,9 @@ private:
    * @param theTLData the `G4HepEm` specific (thread local) object that is used by `G4HepEm` to deliver the secondary tracks to the caller after calling the its `Perform` top level method
    * @param theTrackStack the track stack that is used to store the secondary tracks produced while simulating the entire history of the input track in the steppers
    * @param thePrimary the primary track, in its post interaction state (after calling `G4HepEm` top level `Perform` method), i.e. the one that underwent the physics interaction
+   * @param parentStep the step index (within thePrimary) on which these secondaries were produced
    */
-  static void StackSecondaries(G4HepEmTLData& theTLData, TrackStack& theTrackStack, G4HepEmTrack& thePrimary);
+  static void StackSecondaries(G4HepEmTLData& theTLData, TrackStack& theTrackStack, G4HepEmTrack& thePrimary, int parentStep);
 
   /** This method is called at the end of each simulation steps to collect some data during the simulation.
    *

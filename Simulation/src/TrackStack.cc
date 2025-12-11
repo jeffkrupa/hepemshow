@@ -58,3 +58,15 @@ void TrackStack::Copy(G4HepEmTrack& from, G4HepEmTrack& to) {
   to.SetMCIndex(from.GetMCIndex());
   to.SetOnBoundary(from.GetOnBoundary());
 }
+
+void TrackStack::SetTrackCreationStep(int trackID, int stepID) {
+  fTrackCreationStep[trackID] = stepID;
+}
+
+int TrackStack::GetTrackCreationStep(int trackID) const {
+  auto it = fTrackCreationStep.find(trackID);
+  if (it == fTrackCreationStep.end()) {
+    return -1;
+  }
+  return it->second;
+}

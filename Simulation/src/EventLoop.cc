@@ -93,6 +93,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     // Continuation of 1.:
     thePrimaryGenerator.GenerateOne(primaryTrack);
     primaryTrack.SetID(theTrackStack.GetNextTrackID());
+    theTrackStack.SetTrackCreationStep(primaryTrack.GetID(), -1);
     //
 
     //

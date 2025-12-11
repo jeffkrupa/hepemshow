@@ -25,6 +25,7 @@
  */
 
 #include <vector>
+#include <unordered_map>
 
 class G4HepEmTrack;
 
@@ -78,7 +79,12 @@ public:
   /** Returns with the next track ID (track ID is incremented whenever this method is invoked).*/
   int  GetNextTrackID() { return fCurrentTrackID++; }
   /** Resets the track ID to zero.*/
-  void ReSetTrackID()   { fCurrentTrackID=0; }
+  void ReSetTrackID()   { fCurrentTrackID=0; fTrackCreationStep.clear(); }
+
+  /** Records the step index on which a track was created. */
+  void SetTrackCreationStep(int trackID, int stepID);
+  /** Returns the step index on which a track was created or -1 if unknown. */
+  int GetTrackCreationStep(int trackID) const;
 
 
 
@@ -88,6 +94,7 @@ private:
   int fCurIndx;                          ///< number of tracks used from the capacity
   int fCurrentTrackID;                   ///< current track ID
   std::vector<G4HepEmTrack> fTrackVect;  ///< the stack as a vector of tracks
+  std::unordered_map<int, int> fTrackCreationStep; ///< map from track ID to the parent step index
 };
 
 #endif // TrackStack_HH
