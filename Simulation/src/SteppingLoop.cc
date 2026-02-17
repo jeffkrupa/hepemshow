@@ -19,6 +19,7 @@
 #include "Geometry.hh"
 #include "Box.hh"
 #include "Results.hh"
+#include "VxEdepHist.hh"
 
 #include <fstream>
 #include <atomic>
@@ -40,7 +41,9 @@ namespace {
 }
 
 bool outputall = false;
-
+bool outputboundarylayers = false;
+bool outputvx = false;
+;
 struct MicroAudit {
   static std::ofstream& stream() {
     static std::ofstream s("micro_audit.csv", std::ios::out);
@@ -95,6 +98,37 @@ static bool debugFileInitialized = [](){
 namespace {
   std::unordered_set<int> gDisabledTrackGradients;
   int gGradientStopMode = 2;
+
+  struct VxStats {
+    static std::ofstream& stream() {
+      static std::ofstream s("vx_edep_KE.csv", std::ios::out);
+      static bool inited = false;
+      if (!inited) {
+        s << "vx,edep,KE\n";
+        inited = true;
+      }
+      return s;
+    }
+    static void logLine(const std::string& line) {
+      stream() << line << '\n';
+    }
+  };
+
+  struct BoundaryStats {
+    static std::ofstream& stream() {
+      static std::ofstream s("boundary_stats.csv", std::ios::out);
+      static bool inited = false;
+      if (!inited) {
+        s << "event,charge,trackID,totalSteps,boundarySteps,boundaryStepsBack,boundaryStepsForward,edep,edep_dot,steplength_dot,"
+          << "maxConsecBoundary,maxConsecBoundaryBack,maxConsecBoundaryForward\n";
+        inited = true;
+      }
+      return s;
+    }
+    static void logLine(const std::string& line) {
+      stream() << line << '\n';
+    }
+  };
 
   inline void SanitizeTrackState(G4HepEmTrack& track) {
     G4double* position = track.GetPosition();
@@ -178,17 +212,27 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
   int  nBackScatter  = 0;  //FIX
   G4double lastDirection = theTrack->GetDirection()[0];  //FIX
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
+  int totalSteps = 0;
+  int boundarySteps = 0;
+  int boundaryStepsBack = 0;
+  int boundaryStepsForward = 0;
+  int consecBoundary = 0;
+  int consecBoundaryBack = 0;
+  int consecBoundaryForward = 0;
+  int maxConsecBoundary = 0;
+  int maxConsecBoundaryBack = 0;
+  int maxConsecBoundaryForward = 0;
 
   while (theTrack->GetEKin() > 0.0) {
     if (stop_tracking) {
       DisableTrackGradient(*theTrack);
     }
     if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
-    if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
-    {
-      DisableTrackGradient(*theTrack);
-      stop_tracking = true;
-    }
+    //if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
+    //{
+    //  DisableTrackGradient(*theTrack);
+    //  stop_tracking = true;
+    //}
 
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
@@ -199,21 +243,34 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     G4double pre_step_gX = globalPosition[0];
     G4double pre_step_gY = globalPosition[1];
     G4double pre_step_gZ = globalPosition[2];
-    G4double pre_step_gX_dot = GET_DOTVALUE(globalPosition[0]);
-    G4double pre_step_gY_dot = GET_DOTVALUE(globalPosition[1]);
-    G4double pre_step_gZ_dot = GET_DOTVALUE(globalPosition[2]);
+    #ifdef CODI_FORWARD
+      G4double pre_step_gX_dot = GET_DOTVALUE(globalPosition[0]);
+      G4double pre_step_gY_dot = GET_DOTVALUE(globalPosition[1]);
+      G4double pre_step_gZ_dot = GET_DOTVALUE(globalPosition[2]);
+    #endif
 
     G4double pre_step_vx = curDirection[0];
     G4double pre_step_vy = curDirection[1];
     G4double pre_step_vz = curDirection[2];
     // set the local position = global position (will be local after CalculateDistanceToOut)
     Set3Vect(localPosition, globalPosition);
-    const G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+    G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
     // STOP HERE IF `distToBoundary = 1.0E+20` i.e. we are going out from the Calorimeter
     if (distToBoundary > 1.0E+10) {
+      if (outputboundarylayers) {
+        std::ostringstream statss;
+        statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
+               << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << NAN << ','<< NAN << ',' << NAN << ','
+               << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
+        BoundaryStats::logLine(statss.str());
+
+      }
       return;
     }
     // calculate pre-step point safety
+    localPosition[0] = stop_grad(localPosition[0]);  //FIX
+    localPosition[1] = stop_grad(localPosition[1]);  //FIX
+    localPosition[2] = stop_grad(localPosition[2]);  //FIX
     const G4double preStepSafety  = currentVolume->DistanceToOut(localPosition);
     bool onBoundary = (preStepSafety == 0.0);
     // get the material-cuts couple index from the volume
@@ -238,6 +295,20 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       stepLength = distToPhysics;
       onBoundary = false;
     }
+
+        
+    if (onBoundary && (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2))) //FIX
+    {
+      DisableTrackGradient(*theTrack);
+      stop_tracking = true;
+      globalPosition = theTrack->GetPosition();
+      curDirection   = theTrack->GetDirection();
+      // set the local position = global position (will be local after CalculateDistanceToOut)
+      Set3Vect(localPosition, globalPosition);
+      distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+      stepLength = distToBoundary;
+    }
+
     std::ostringstream oss;
     oss.setf(std::ios::scientific);
     oss.precision(9);
@@ -257,6 +328,27 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     theTrack->SetGStepLength(stepLength);
     // update the `onBoundary` falg
     theTrack->SetOnBoundary(onBoundary);
+    ++totalSteps;
+    if (onBoundary) {
+      ++boundarySteps;
+      ++consecBoundary;
+      if (consecBoundary > maxConsecBoundary) maxConsecBoundary = consecBoundary;
+      if (theTrack->GetDirection()[0] < 0.0) {
+        ++boundaryStepsBack;
+        ++consecBoundaryBack;
+        consecBoundaryForward = 0;
+        if (consecBoundaryBack > maxConsecBoundaryBack) maxConsecBoundaryBack = consecBoundaryBack;
+      } else {
+        ++boundaryStepsForward;
+        ++consecBoundaryForward;
+        consecBoundaryBack = 0;
+        if (consecBoundaryForward > maxConsecBoundaryForward) maxConsecBoundaryForward = consecBoundaryForward;
+      }
+    } else {
+      consecBoundary = 0;
+      consecBoundaryBack = 0;
+      consecBoundaryForward = 0;
+    }
     // Then call `Perform` to do evything needs to be done with the track regarding physics
     // NOTE:
     //  - in case of boundary limited steps: no physics interaction just update
@@ -265,10 +357,11 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     auto numIAleft_0_prePerform = GET_VALUE(theTrack->GetNumIALeft()[0]);
     auto numIAleft_1_prePerform = GET_VALUE(theTrack->GetNumIALeft()[1]);
     auto numIAleft_2_prePerform = GET_VALUE(theTrack->GetNumIALeft()[2]);
-    auto numIAleft_0_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[0]);
-    auto numIAleft_1_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[1]);
-    auto numIAleft_2_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[2]);
-
+    #ifdef CODI_FORWARD
+      auto numIAleft_0_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[0]);
+      auto numIAleft_1_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[1]);
+      auto numIAleft_2_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[2]);
+    #endif 
     G4HepEmGammaManager::Perform(theState.fData, theState.fParameters, &theTLData);
     //if (stop_tracking) {
     //  DisableTrackGradient(*theTrack);
@@ -276,33 +369,35 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
 
 
 
-    bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
+    //#ifdef CODI_FORWARD
+      bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
 
-    if(big_grad){
-      oss
-        << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ',' << theTrack->GetParentID() << ',' << creationStep << ','
-        << numStep << ',' << indxLayer << ',' << theTrack->GetWinnerProcessIndex() << ',' << (stop_tracking ?1:0) << ','
-        << (onBoundary ?1:0) << ',' << -1 << ','
-        << pre_step_gX << ',' << pre_step_gY << ',' << pre_step_gZ << ','
-        << pre_step_gX_dot << ',' << pre_step_gY_dot << ',' << pre_step_gZ_dot << ','
-        << theTrack->GetPosition()[0] << ',' << theTrack->GetPosition()[1] << ',' << theTrack->GetPosition()[2] << ','
-        << '-999' << ',' << '-999' << ',' << '-999' << ','
-        << pre_step_vx << ',' << pre_step_vy << ',' << pre_step_vz << ','
-        << theTrack->GetDirection()[0] << ',' << theTrack->GetDirection()[1] << ',' << theTrack->GetDirection()[2] << ',' << preStepSafety << ',' << '-999' << ','
-        << numIAleft_0_prePerform << ',' << numIAleft_1_prePerform << ',' << numIAleft_2_prePerform << ','
-        << numIAleft_0_prePerform_dot << ',' << numIAleft_1_prePerform_dot << ',' << numIAleft_2_prePerform_dot << ','
-        << theTrack->GetNumIALeft()[0] << ',' << theTrack->GetNumIALeft()[1] << ',' << theTrack->GetNumIALeft()[2] << ','
-        << GET_DOTVALUE(theTrack->GetNumIALeft()[0]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[1]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[2]) << ','
-        << theTrack->GetMFP()[0] << ',' << theTrack->GetMFP()[1] << ',' << theTrack->GetMFP()[2] << ',' 
-        << GET_DOTVALUE(theTrack->GetMFP()[0]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[1]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[2]) << ',' 
-        << stepLength << ',' << GET_DOTVALUE(stepLength) << ','
-        << '-999' << ',' << '-999' << ',' 
-        << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ','
-        << theTrack->GetEKin() << ',' << GET_DOTVALUE(theTrack->GetEKin())<< ','
-        << distToBoundary << ',' << GET_DOTVALUE(distToBoundary) << ',' << distToPhysics << ',' << GET_DOTVALUE(distToPhysics);
-      MicroAudit::logLine(oss.str());
+      if(big_grad){
+        oss
+          << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ',' << theTrack->GetParentID() << ',' << creationStep << ','
+          << numStep << ',' << indxLayer << ',' << theTrack->GetWinnerProcessIndex() << ',' << (stop_tracking ?1:0) << ','
+          << (onBoundary ?1:0) << ',' << -1 << ','
+          << pre_step_gX << ',' << pre_step_gY << ',' << pre_step_gZ << ','
+          << pre_step_gX_dot << ',' << pre_step_gY_dot << ',' << pre_step_gZ_dot << ','
+          << theTrack->GetPosition()[0] << ',' << theTrack->GetPosition()[1] << ',' << theTrack->GetPosition()[2] << ','
+          << '-999' << ',' << '-999' << ',' << '-999' << ','
+          << pre_step_vx << ',' << pre_step_vy << ',' << pre_step_vz << ','
+          << theTrack->GetDirection()[0] << ',' << theTrack->GetDirection()[1] << ',' << theTrack->GetDirection()[2] << ',' << preStepSafety << ',' << '-999' << ','
+          << numIAleft_0_prePerform << ',' << numIAleft_1_prePerform << ',' << numIAleft_2_prePerform << ','
+          << numIAleft_0_prePerform_dot << ',' << numIAleft_1_prePerform_dot << ',' << numIAleft_2_prePerform_dot << ','
+          << theTrack->GetNumIALeft()[0] << ',' << theTrack->GetNumIALeft()[1] << ',' << theTrack->GetNumIALeft()[2] << ','
+          << GET_DOTVALUE(theTrack->GetNumIALeft()[0]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[1]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[2]) << ','
+          << theTrack->GetMFP()[0] << ',' << theTrack->GetMFP()[1] << ',' << theTrack->GetMFP()[2] << ',' 
+          << GET_DOTVALUE(theTrack->GetMFP()[0]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[1]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[2]) << ',' 
+          << stepLength << ',' << GET_DOTVALUE(stepLength) << ','
+          << '-999' << ',' << '-999' << ',' 
+          << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ','
+          << theTrack->GetEKin() << ',' << GET_DOTVALUE(theTrack->GetEKin())<< ','
+          << distToBoundary << ',' << GET_DOTVALUE(distToBoundary) << ',' << distToPhysics << ',' << GET_DOTVALUE(distToPhysics);
+        MicroAudit::logLine(oss.str());
 
-    }
+      }
+    //#endif
     //
     // Take and stack all secondaries (if any) that has been produced.
     if (theTLData.GetNumSecondaryElectronTrack() + theTLData.GetNumSecondaryGammaTrack() > 0 ) {
@@ -316,6 +411,13 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     lastDirection = theTrack->GetDirection()[0];  //FIX
 
     ++numStep;
+  }
+  if (outputboundarylayers) {
+    std::ostringstream statss;
+    statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
+          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' <<  GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ',' << GET_DOTVALUE(theTrack->GetGStepLength()) << ','
+          << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
+    BoundaryStats::logLine(statss.str());
   }
 }
 
@@ -340,6 +442,16 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
   G4double lastDirection = theTrack->GetDirection()[0];  //FIX
 //  bool wasPushed     = false;
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
+  int totalSteps = 0;
+  int boundarySteps = 0;
+  int boundaryStepsBack = 0;
+  int boundaryStepsForward = 0;
+  int consecBoundary = 0;
+  int consecBoundaryBack = 0;
+  int consecBoundaryForward = 0;
+  int maxConsecBoundary = 0;
+  int maxConsecBoundaryBack = 0;
+  int maxConsecBoundaryForward = 0;
 
   // keep tracking while the kinetic energy drops to zero (i.e. e-/e+ lose all its energy; e+ annihilates)
   // unless the track is going out of the Calorimeter
@@ -353,11 +465,6 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
     if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
     lastDirection = theTrack->GetDirection()[0];  //FIX
-    if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
-    {
-      DisableTrackGradient(*theTrack);
-      stop_tracking = true;
-    }
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
     //       (taking into account the direction and tolerance)
@@ -371,17 +478,25 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     G4double pre_step_gY = globalPosition[1];
     G4double pre_step_gZ = globalPosition[2];
 
-    G4double pre_step_gX_dot = GET_DOTVALUE(globalPosition[0]);
-    G4double pre_step_gY_dot = GET_DOTVALUE(globalPosition[1]);
-    G4double pre_step_gZ_dot = GET_DOTVALUE(globalPosition[2]);
-
+    #ifdef CODI_FORWARD
+      G4double pre_step_gX_dot = GET_DOTVALUE(globalPosition[0]);
+      G4double pre_step_gY_dot = GET_DOTVALUE(globalPosition[1]);
+      G4double pre_step_gZ_dot = GET_DOTVALUE(globalPosition[2]);
+    #endif
     G4double pre_step_vx = curDirection[0];
     G4double pre_step_vy = curDirection[1];
     G4double pre_step_vz = curDirection[2];
 
-    const G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+    G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
     // STOP HERE IF `distToBoundary = 1.0E+20` i.e. we are going out from the Calorimeter
     if (distToBoundary > 1.0E+10) {
+      if (outputboundarylayers){
+        std::ostringstream statss;
+        statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
+              << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << NAN << ',' << NAN << ',' << NAN << ','
+              << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
+        BoundaryStats::logLine(statss.str());
+      } 
       return;
     }
     // at the pre-step point: calculate safety and check if on-boundary (use only if we do not know that the
@@ -425,6 +540,20 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
       stepLength = distToPhysics;
       onBoundary = false;
     }
+    
+    if (onBoundary && (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2))) //FIX
+    {
+      DisableTrackGradient(*theTrack);
+      stop_tracking = true;
+      globalPosition = theTrack->GetPosition();
+      curDirection   = theTrack->GetDirection();
+      // set the local position = global position (will be local after CalculateDistanceToOut)
+      Set3Vect(localPosition, globalPosition);
+      distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+      stepLength = distToBoundary;
+    }
+
+
     // Apply a small push if the step length is zero.
     // NOTE: it can happen that we are actually (logically) out of the volume
     //       where we located to be (due to this simplified "navigaton"). So
@@ -446,6 +575,27 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     theTrack->SetGStepLength(stepLength);
     // update the `onBoundary` falg
     theTrack->SetOnBoundary(onBoundary);
+    ++totalSteps;
+    if (onBoundary) {
+      ++boundarySteps;
+      ++consecBoundary;
+      if (consecBoundary > maxConsecBoundary) maxConsecBoundary = consecBoundary;
+      if (theTrack->GetDirection()[0] < 0.0) {
+        ++boundaryStepsBack;
+        ++consecBoundaryBack;
+        consecBoundaryForward = 0;
+        if (consecBoundaryBack > maxConsecBoundaryBack) maxConsecBoundaryBack = consecBoundaryBack;
+      } else {
+        ++boundaryStepsForward;
+        ++consecBoundaryForward;
+        consecBoundaryBack = 0;
+        if (consecBoundaryForward > maxConsecBoundaryForward) maxConsecBoundaryForward = consecBoundaryForward;
+      }
+    } else {
+      consecBoundary = 0;
+      consecBoundaryBack = 0;
+      consecBoundaryForward = 0;
+    }
 
     // Then call `Perform` to do evything needs to be done with the track regarding physics
     //  - the continuous interactions will be performed in all cases (i.e. independently
@@ -464,9 +614,11 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     auto numIAleft_0_prePerform = GET_VALUE(theTrack->GetNumIALeft()[0]);
     auto numIAleft_1_prePerform = GET_VALUE(theTrack->GetNumIALeft()[1]);
     auto numIAleft_2_prePerform = GET_VALUE(theTrack->GetNumIALeft()[2]);
-    auto numIAleft_0_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[0]);
-    auto numIAleft_1_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[1]);
-    auto numIAleft_2_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[2]);
+    #ifdef CODI_FORWARD
+      auto numIAleft_0_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[0]);
+      auto numIAleft_1_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[1]);
+      auto numIAleft_2_prePerform_dot = GET_DOTVALUE(theTrack->GetNumIALeft()[2]);
+    #endif 
 
     G4HepEmElectronManager::Perform(theState.fData, theState.fParameters, &theTLData);
     // take the real, i.e. physical step length (only if MSC is active in G4HepEmElectronManager because the
@@ -519,34 +671,35 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
 
 
-    bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
+    //#ifdef CODI_FORWARD
+      bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
 
-    if(big_grad){
-      oss
-        << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ',' << theTrack->GetParentID() << ',' << creationStep << ','
-        << numStep << ',' << indxLayer << ',' << theTrack->GetWinnerProcessIndex() << ',' << (stop_tracking ?1:0) << ','
-        << (onBoundary ?1:0) << ',' << -1 << ','
-        << pre_step_gX << ',' << pre_step_gY << ',' << pre_step_gZ << ','
-        << pre_step_gX_dot << ',' << pre_step_gY_dot << ',' << pre_step_gZ_dot << ','
-        << pre_MSC_gX << ',' << pre_MSC_gY << ',' << pre_MSC_gZ << ','
-        << theTrack->GetPosition()[0] << ',' << theTrack->GetPosition()[1] << ',' << theTrack->GetPosition()[2] << ','
-        << pre_step_vx << ',' << pre_step_vy << ',' << pre_step_vz << ','
-        << theTrack->GetDirection()[0] << ',' << theTrack->GetDirection()[1] << ',' << theTrack->GetDirection()[2] << ',' << preStepSafety << ',' << postSafety << ','
-        << numIAleft_0_prePerform << ',' << numIAleft_1_prePerform << ',' << numIAleft_2_prePerform << ','
-        << numIAleft_0_prePerform_dot << ',' << numIAleft_1_prePerform_dot << ',' << numIAleft_2_prePerform_dot << ','
-        << theTrack->GetNumIALeft()[0] << ',' << theTrack->GetNumIALeft()[1] << ',' << theTrack->GetNumIALeft()[2] << ','
-        << GET_DOTVALUE(theTrack->GetNumIALeft()[0]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[1]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[2]) << ','
-        << theTrack->GetMFP()[0] << ',' << theTrack->GetMFP()[1] << ',' << theTrack->GetMFP()[2] << ',' 
-        << GET_DOTVALUE(theTrack->GetMFP()[0]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[1]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[2]) << ',' 
-        << stepLength << ',' << GET_DOTVALUE(stepLength) << ','
-        << pStepLength << ',' << GET_DOTVALUE(pStepLength) << ','
-        << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ','
-        << theTrack->GetEKin() << ',' << GET_DOTVALUE(theTrack->GetEKin())<< ','
-        << distToBoundary << ',' << GET_DOTVALUE(distToBoundary) << ',' << distToPhysics << ',' << GET_DOTVALUE(distToPhysics);
-      MicroAudit::logLine(oss.str());
+      if(big_grad){
+        oss
+          << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ',' << theTrack->GetParentID() << ',' << creationStep << ','
+          << numStep << ',' << indxLayer << ',' << theTrack->GetWinnerProcessIndex() << ',' << (stop_tracking ?1:0) << ','
+          << (onBoundary ?1:0) << ',' << -1 << ','
+          << pre_step_gX << ',' << pre_step_gY << ',' << pre_step_gZ << ','
+          << pre_step_gX_dot << ',' << pre_step_gY_dot << ',' << pre_step_gZ_dot << ','
+          << pre_MSC_gX << ',' << pre_MSC_gY << ',' << pre_MSC_gZ << ','
+          << theTrack->GetPosition()[0] << ',' << theTrack->GetPosition()[1] << ',' << theTrack->GetPosition()[2] << ','
+          << pre_step_vx << ',' << pre_step_vy << ',' << pre_step_vz << ','
+          << theTrack->GetDirection()[0] << ',' << theTrack->GetDirection()[1] << ',' << theTrack->GetDirection()[2] << ',' << preStepSafety << ',' << postSafety << ','
+          << numIAleft_0_prePerform << ',' << numIAleft_1_prePerform << ',' << numIAleft_2_prePerform << ','
+          << numIAleft_0_prePerform_dot << ',' << numIAleft_1_prePerform_dot << ',' << numIAleft_2_prePerform_dot << ','
+          << theTrack->GetNumIALeft()[0] << ',' << theTrack->GetNumIALeft()[1] << ',' << theTrack->GetNumIALeft()[2] << ','
+          << GET_DOTVALUE(theTrack->GetNumIALeft()[0]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[1]) << ',' << GET_DOTVALUE(theTrack->GetNumIALeft()[2]) << ','
+          << theTrack->GetMFP()[0] << ',' << theTrack->GetMFP()[1] << ',' << theTrack->GetMFP()[2] << ',' 
+          << GET_DOTVALUE(theTrack->GetMFP()[0]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[1]) << ',' << GET_DOTVALUE(theTrack->GetMFP()[2]) << ',' 
+          << stepLength << ',' << GET_DOTVALUE(stepLength) << ','
+          << pStepLength << ',' << GET_DOTVALUE(pStepLength) << ','
+          << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ','
+          << theTrack->GetEKin() << ',' << GET_DOTVALUE(theTrack->GetEKin())<< ','
+          << distToBoundary << ',' << GET_DOTVALUE(distToBoundary) << ',' << distToPhysics << ',' << GET_DOTVALUE(distToPhysics);
+        MicroAudit::logLine(oss.str());
 
-    }
-
+      }
+    //#endif
     //
     // stack all secondaries (if any) that has been produced in this step
     if (theTLData.GetNumSecondaryElectronTrack() + theTLData.GetNumSecondaryGammaTrack() > 0 ) {
@@ -557,6 +710,13 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     wasOnBoundary = onBoundary;
     lastDirection = theTrack->GetDirection()[0];  //FIX
     ++numStep;
+  }
+  if (outputboundarylayers) {
+    std::ostringstream statss;
+    statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
+          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ',' << GET_DOTVALUE(theTrack->GetGStepLength()) << ','
+          << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
+    BoundaryStats::logLine(statss.str());
   }
 }
 
@@ -613,6 +773,8 @@ void SteppingLoop::SteppingAction(Results& theResult, const G4HepEmTrack& theTra
   }
   if (edep > 0.0) {
     theResult.fEdepPerLayer_CurrentEvent.Fill(indxLayer, edep);
+    auto* dir = const_cast<G4HepEmTrack&>(theTrack).GetDirection();
+    VxEdepHist::Fill(indxLayer, GET_VALUE(dir[0]), edep);
     switch (indxAbsorber) {
       case 0: theResult.fPerEventRes.fEdepAbs += edep;
               break;

@@ -10,6 +10,7 @@
 #include "PrimaryGenerator.hh"
 #include "Geometry.hh"
 #include "Results.hh"
+#include "VxEdepHist.hh"
 
 #include "TrackStack.hh"
 #include "SteppingLoop.hh"
@@ -57,6 +58,8 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     eventID = target_event;
     numEventToSimulate = target_event+1;
   }
+
+  VxEdepHist::ResetRun();
 
   // enter to the event loop: generate and simulate as many events as required
   while (eventID < numEventToSimulate) {
@@ -160,8 +163,9 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
       EndOfTrackingAction(theResult, *nextTrack);
     };
     //
-    // 4. Call the end of event action
-    EndOfEventAction(theResult, eventID);
+  // 4. Call the end of event action
+  EndOfEventAction(theResult, eventID);
+  VxEdepHist::EndEvent();
     //
     // increase the event ID (i.e. counter of simulated events)
     ++eventID;;
@@ -180,6 +184,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
   if (verbosity > 0) {
     std::cout << " --- EventLoop::ProcessEvents: completed simulation within t = " << theTime << " [s]" << std::endl;
   }
+  VxEdepHist::FlushRun();
 }
 
 

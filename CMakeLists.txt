@@ -55,6 +55,7 @@ set(sources_SIM
   ${CMAKE_SOURCE_DIR}/Simulation/src/Physics.cc
   ${CMAKE_SOURCE_DIR}/Simulation/src/PrimaryGenerator.cc
   ${CMAKE_SOURCE_DIR}/Simulation/src/Results.cc
+  ${CMAKE_SOURCE_DIR}/Simulation/src/VxEdepHist.cc
   ${CMAKE_SOURCE_DIR}/Simulation/src/SteppingLoop.cc
   ${CMAKE_SOURCE_DIR}/Simulation/src/TrackStack.cc
   ${CMAKE_SOURCE_DIR}/Simulation/src/URandom.cc
