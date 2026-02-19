@@ -31,8 +31,8 @@
 #define MICRO_AUDIT_MAX 2e6   // hard cap on lines we'll write
 #endif
 
-const double Ldot_thr   = 5e6;         // tweak to match your scale
-const double Edot_thr   = 5e6;         // idem
+const double Ldot_thr   = 5e999;         // tweak to match your scale
+const double Edot_thr   = 5e999;         // idem
 
 namespace {
   G4double kDefaultKECut = 0.5;
@@ -98,6 +98,8 @@ static bool debugFileInitialized = [](){
 namespace {
   std::unordered_set<int> gDisabledTrackGradients;
   int gGradientStopMode = 2;
+  bool gGrazingStopsFullTrack = true;
+  const G4double kDefaultNearBoundarySafety = 5.0E-6;
 
   struct VxStats {
     static std::ofstream& stream() {
@@ -135,6 +137,10 @@ namespace {
     track.SetPosition(stop_grad(position[0]), stop_grad(position[1]), stop_grad(position[2]));
     G4double* direction = track.GetDirection();
     track.SetDirection(stop_grad(direction[0]), stop_grad(direction[1]), stop_grad(direction[2]));
+  }
+
+  inline G4double AbsValue(G4double v) {
+    return (v < 0.0) ? -v : v;
   }
 }
 
@@ -180,6 +186,10 @@ void SteppingLoop::ConfigureKECut(bool enable, G4double threshold) {
   }
 }
 
+void SteppingLoop::ConfigureGrazingStopPolicy(bool disableFullTrack) {
+  gGrazingStopsFullTrack = disableFullTrack;
+}
+
 
 //
 // NOTE: we always calculate the distance to boundary and the pre-step point safety
@@ -205,12 +215,12 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
   int  indxLayer     = -1;
   int  indxAbs       = -1;
   G4double  localPosition[3];
+  const G4double vxThreshold = AbsValue(threshold);
+  const G4double nearBoundarySafety = threshold2 > 0.0 ? threshold2 : kDefaultNearBoundarySafety;
   bool stop_tracking = IsTrackGradientDisabled(*theTrack);
   if (stop_tracking) {
     DisableTrackGradient(*theTrack);
   }
-  int  nBackScatter  = 0;  //FIX
-  G4double lastDirection = theTrack->GetDirection()[0];  //FIX
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
   int totalSteps = 0;
   int boundarySteps = 0;
@@ -227,12 +237,6 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     if (stop_tracking) {
       DisableTrackGradient(*theTrack);
     }
-    if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
-    //if ((nBackScatter>0) || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2)) //FIX
-    //{
-    //  DisableTrackGradient(*theTrack);
-    //  stop_tracking = true;
-    //}
 
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
@@ -297,16 +301,27 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     }
 
         
-    if (onBoundary && (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2))) //FIX
-    {
-      DisableTrackGradient(*theTrack);
-      stop_tracking = true;
+    const G4double stepVx = theTrack->GetDirection()[0];
+    const bool isBackward = stepVx < 0.0;
+    const bool isGrazing = AbsValue(stepVx) < vxThreshold;
+    const bool isUnsafeBackward = isBackward;
+    const bool isUnsafeGrazing = (onBoundary || (preStepSafety < nearBoundarySafety)) && isGrazing;
+    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing;
+    if (isUnsafeStep) {
+      if (isUnsafeBackward || gGrazingStopsFullTrack) {
+        DisableTrackGradient(*theTrack);
+        stop_tracking = true;
+      } else {
+        SanitizeTrackState(*theTrack);
+      }
       globalPosition = theTrack->GetPosition();
       curDirection   = theTrack->GetDirection();
-      // set the local position = global position (will be local after CalculateDistanceToOut)
-      Set3Vect(localPosition, globalPosition);
-      distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
-      stepLength = distToBoundary;
+      if (onBoundary) {
+        // Keep boundary-limited steps boundary-limited after sanitizing/stopgrad.
+        Set3Vect(localPosition, globalPosition);
+        distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+        stepLength = distToBoundary;
+      }
     }
 
     std::ostringstream oss;
@@ -369,7 +384,7 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
 
 
 
-    //#ifdef CODI_FORWARD
+    #ifdef CODI_FORWARD
       bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
 
       if(big_grad){
@@ -397,7 +412,7 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
         MicroAudit::logLine(oss.str());
 
       }
-    //#endif
+    #endif
     //
     // Take and stack all secondaries (if any) that has been produced.
     if (theTLData.GetNumSecondaryElectronTrack() + theTLData.GetNumSecondaryGammaTrack() > 0 ) {
@@ -408,14 +423,18 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
 
     // call the SteppingAction (whenever a step was done in the calorimeter)
     SteppingAction(theResult, *theTrack, currentVolume, stepLength, indxLayer, indxAbs, eventID, numStep);
-    lastDirection = theTrack->GetDirection()[0];  //FIX
-
     ++numStep;
   }
   if (outputboundarylayers) {
+    G4double edepDot = 0.0;
+    G4double stepDot = 0.0;
+    #ifdef CODI_FORWARD
+      edepDot = GET_DOTVALUE(theTrack->GetEnergyDeposit());
+      stepDot = GET_DOTVALUE(theTrack->GetGStepLength());
+    #endif
     std::ostringstream statss;
     statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' <<  GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ',' << GET_DOTVALUE(theTrack->GetGStepLength()) << ','
+          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' <<  edepDot << ',' << stepDot << ','
           << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
     BoundaryStats::logLine(statss.str());
   }
@@ -437,9 +456,9 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
   int  indxLayer     = -1;
   int  indxAbs       = -1;
   G4double  localPosition[3];
+  const G4double vxThreshold = AbsValue(threshold);
+  const G4double nearBoundarySafety = threshold2 > 0.0 ? threshold2 : kDefaultNearBoundarySafety;
   bool wasOnBoundary = false;
-  int  nBackScatter  = 0;  //FIX
-  G4double lastDirection = theTrack->GetDirection()[0];  //FIX
 //  bool wasPushed     = false;
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
   int totalSteps = 0;
@@ -463,8 +482,6 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     if (stop_tracking) {
       DisableTrackGradient(*theTrack);
     }
-    if (lastDirection * theTrack->GetDirection()[0] < -1e-8) nBackScatter++;  //FIX
-    lastDirection = theTrack->GetDirection()[0];  //FIX
     // calculate distance to boundary from the pre-step point: will locate the pont
     // NOTE: this should never be zero as zero means that the point is outside of the volume
     //       (taking into account the direction and tolerance)
@@ -541,16 +558,27 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
       onBoundary = false;
     }
     
-    if (onBoundary && (nBackScatter > 1 || (theTrack->GetDirection()[0] < threshold && theTrack->GetDirection()[0] > threshold2))) //FIX
-    {
-      DisableTrackGradient(*theTrack);
-      stop_tracking = true;
+    const G4double stepVx = theTrack->GetDirection()[0];
+    const bool isBackward = stepVx < 0.0;
+    const bool isGrazing = AbsValue(stepVx) < vxThreshold;
+    const bool isUnsafeBackward = isBackward;
+    const bool isUnsafeGrazing = (onBoundary || (preStepSafety < nearBoundarySafety)) && isGrazing;
+    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing;
+    if (isUnsafeStep) {
+      if (isUnsafeBackward || gGrazingStopsFullTrack) {
+        DisableTrackGradient(*theTrack);
+        stop_tracking = true;
+      } else {
+        SanitizeTrackState(*theTrack);
+      }
       globalPosition = theTrack->GetPosition();
       curDirection   = theTrack->GetDirection();
-      // set the local position = global position (will be local after CalculateDistanceToOut)
-      Set3Vect(localPosition, globalPosition);
-      distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
-      stepLength = distToBoundary;
+      if (onBoundary) {
+        // Keep boundary-limited steps boundary-limited after sanitizing/stopgrad.
+        Set3Vect(localPosition, globalPosition);
+        distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
+        stepLength = distToBoundary;
+      }
     }
 
 
@@ -671,7 +699,7 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
 
 
-    //#ifdef CODI_FORWARD
+    #ifdef CODI_FORWARD
       bool big_grad = outputall || (std::abs(GET_DOTVALUE(stepLength)) > Ldot_thr) || (std::abs(GET_DOTVALUE(theTrack->GetEnergyDeposit())) > Edot_thr);
 
       if(big_grad){
@@ -699,7 +727,7 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
         MicroAudit::logLine(oss.str());
 
       }
-    //#endif
+    #endif
     //
     // stack all secondaries (if any) that has been produced in this step
     if (theTLData.GetNumSecondaryElectronTrack() + theTLData.GetNumSecondaryGammaTrack() > 0 ) {
@@ -708,13 +736,18 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
 
     SteppingAction(theResult, *theTrack, currentVolume, pStepLength, indxLayer, indxAbs, eventID, numStep);
     wasOnBoundary = onBoundary;
-    lastDirection = theTrack->GetDirection()[0];  //FIX
     ++numStep;
   }
   if (outputboundarylayers) {
+    G4double edepDot = 0.0;
+    G4double stepDot = 0.0;
+    #ifdef CODI_FORWARD
+      edepDot = GET_DOTVALUE(theTrack->GetEnergyDeposit());
+      stepDot = GET_DOTVALUE(theTrack->GetGStepLength());
+    #endif
     std::ostringstream statss;
     statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' << GET_DOTVALUE(theTrack->GetEnergyDeposit()) << ',' << GET_DOTVALUE(theTrack->GetGStepLength()) << ','
+          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' << edepDot << ',' << stepDot << ','
           << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
     BoundaryStats::logLine(statss.str());
   }

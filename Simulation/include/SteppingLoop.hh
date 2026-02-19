@@ -139,6 +139,9 @@ public:
   /** Enable or disable the kinetic energy cut and set its threshold in [MeV]. */
   static void ConfigureKECut(bool enable, G4double threshold);
 
+  /** Choose if grazing unsafe steps disable gradients for the full track (true) or current-step state only (false). */
+  static void ConfigureGrazingStopPolicy(bool disableFullTrack);
+
 private:
   SteppingLoop() = delete;
 
