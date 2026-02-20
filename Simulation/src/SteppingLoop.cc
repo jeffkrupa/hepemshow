@@ -26,6 +26,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <cmath>
+#include <limits>
 
 #ifndef MICRO_AUDIT_MAX
 #define MICRO_AUDIT_MAX 2e6   // hard cap on lines we'll write
@@ -41,7 +42,8 @@ namespace {
 }
 
 bool outputall = false;
-bool outputboundarylayers = false;
+bool outputboundarylayers = true;
+bool outputpingpongtracks = true;
 bool outputvx = false;
 ;
 struct MicroAudit {
@@ -121,8 +123,11 @@ namespace {
       static std::ofstream s("boundary_stats.csv", std::ios::out);
       static bool inited = false;
       if (!inited) {
-        s << "event,charge,trackID,totalSteps,boundarySteps,boundaryStepsBack,boundaryStepsForward,edep,edep_dot,steplength_dot,"
-          << "maxConsecBoundary,maxConsecBoundaryBack,maxConsecBoundaryForward\n";
+        s << "event,numTracks,totalSteps,totalStepsBack,totalStepsForward,boundarySteps,boundaryStepsBack,boundaryStepsForward,edep,steplength_dot";
+        for (int i = 0; i < 50; ++i) {
+          s << ",layer_edep_" << i;
+        }
+        s << ",maxConsecBoundary,maxConsecBoundaryBack,maxConsecBoundaryForward\n";
         inited = true;
       }
       return s;
@@ -131,6 +136,89 @@ namespace {
       stream() << line << '\n';
     }
   };
+
+  struct PingPongTrackStats {
+    static std::ofstream& stream() {
+      static std::ofstream s("track_pingpong_stats.csv", std::ios::out);
+      static bool inited = false;
+      if (!inited) {
+        s << "event,trackID,parentID,creationStep,charge,"
+          << "totalSteps,totalStepsBack,totalStepsForward,"
+          << "boundarySteps,boundaryStepsBack,boundaryStepsForward,"
+          << "nFlipVx,maxConsecBL,maxConsecBLBack,maxConsecBLForward,"
+          << "initVx,finalVx,isInitBackward,isFinalBackward,"
+          << "blEkinCount,blEkinMean,blEkinStd,blEkinMin,blEkinMax\n";
+        inited = true;
+      }
+      return s;
+    }
+    static void logLine(const std::string& line) {
+      stream() << line << '\n';
+    }
+  };
+
+  struct BoundaryEventAgg {
+    int numTracks = 0;
+    long long totalSteps = 0;
+    long long totalStepsBack = 0;
+    long long totalStepsForward = 0;
+    long long boundarySteps = 0;
+    long long boundaryStepsBack = 0;
+    long long boundaryStepsForward = 0;
+    double stepLengthDot = 0.0;
+    int maxConsecBoundary = 0;
+    int maxConsecBoundaryBack = 0;
+    int maxConsecBoundaryForward = 0;
+  };
+
+  std::unordered_map<int, BoundaryEventAgg> gBoundaryStatsByEvent;
+
+  inline bool IsFiniteNumber(double x) {
+    return std::isfinite(x);
+  }
+
+  inline double ScalarDotValue(const G4double& x) {
+    #ifdef CODI_FORWARD
+      return GET_DOTVALUE(x);
+    #else
+      (void)x;
+      return 0.0;
+    #endif
+  }
+
+  inline void AccumulateBoundaryTrackStats(
+      int eventID,
+      int totalSteps,
+      int totalStepsBack,
+      int totalStepsForward,
+      int boundarySteps,
+      int boundaryStepsBack,
+      int boundaryStepsForward,
+      double stepLengthDot,
+      int maxConsecBoundary,
+      int maxConsecBoundaryBack,
+      int maxConsecBoundaryForward) {
+    auto& agg = gBoundaryStatsByEvent[eventID];
+    ++agg.numTracks;
+    agg.totalSteps += totalSteps;
+    agg.totalStepsBack += totalStepsBack;
+    agg.totalStepsForward += totalStepsForward;
+    agg.boundarySteps += boundarySteps;
+    agg.boundaryStepsBack += boundaryStepsBack;
+    agg.boundaryStepsForward += boundaryStepsForward;
+    if (IsFiniteNumber(stepLengthDot)) {
+      agg.stepLengthDot += stepLengthDot;
+    }
+    if (maxConsecBoundary > agg.maxConsecBoundary) {
+      agg.maxConsecBoundary = maxConsecBoundary;
+    }
+    if (maxConsecBoundaryBack > agg.maxConsecBoundaryBack) {
+      agg.maxConsecBoundaryBack = maxConsecBoundaryBack;
+    }
+    if (maxConsecBoundaryForward > agg.maxConsecBoundaryForward) {
+      agg.maxConsecBoundaryForward = maxConsecBoundaryForward;
+    }
+  }
 
   inline void SanitizeTrackState(G4HepEmTrack& track) {
     G4double* position = track.GetPosition();
@@ -141,6 +229,80 @@ namespace {
 
   inline G4double AbsValue(G4double v) {
     return (v < 0.0) ? -v : v;
+  }
+
+  inline int VxSign(double vx) {
+    if (vx < 0.0) return -1;
+    if (vx > 0.0) return 1;
+    return 0;
+  }
+
+  inline void LogTrackPingPongStats(
+      int eventID,
+      G4HepEmTrack& track,
+      int creationStep,
+      int totalSteps,
+      int totalStepsBack,
+      int boundarySteps,
+      int boundaryStepsBack,
+      int nFlipVx,
+      int maxConsecBoundary,
+      int maxConsecBoundaryBack,
+      int maxConsecBoundaryForward,
+      double initVx,
+      int blEkinCount,
+      double blEkinSum,
+      double blEkinSqSum,
+      double blEkinMin,
+      double blEkinMax) {
+    if (!outputpingpongtracks) {
+      return;
+    }
+    const int totalStepsForward = totalSteps - totalStepsBack;
+    const int boundaryStepsForward = boundarySteps - boundaryStepsBack;
+    const double finalVx = GET_VALUE(track.GetDirection()[0]);
+    const int isInitBackward = initVx < 0.0 ? 1 : 0;
+    const int isFinalBackward = finalVx < 0.0 ? 1 : 0;
+
+    double blEkinMean = NAN;
+    double blEkinStd = NAN;
+    double blEkinMinOut = NAN;
+    double blEkinMaxOut = NAN;
+    if (blEkinCount > 0) {
+      blEkinMean = blEkinSum / static_cast<double>(blEkinCount);
+      const double meanSq = blEkinSqSum / static_cast<double>(blEkinCount);
+      const double var = meanSq - blEkinMean * blEkinMean;
+      blEkinStd = var > 0.0 ? std::sqrt(var) : 0.0;
+      blEkinMinOut = blEkinMin;
+      blEkinMaxOut = blEkinMax;
+    }
+
+    std::ostringstream s;
+    s << eventID << ','
+      << track.GetID() << ','
+      << track.GetParentID() << ','
+      << creationStep << ','
+      << GET_VALUE(track.GetCharge()) << ','
+      << totalSteps << ','
+      << totalStepsBack << ','
+      << totalStepsForward << ','
+      << boundarySteps << ','
+      << boundaryStepsBack << ','
+      << boundaryStepsForward << ','
+      << nFlipVx << ','
+      << maxConsecBoundary << ','
+      << maxConsecBoundaryBack << ','
+      << maxConsecBoundaryForward << ','
+      << initVx << ','
+      << finalVx << ','
+      << isInitBackward << ','
+      << isFinalBackward << ','
+      << blEkinCount << ','
+      << blEkinMean << ','
+      << blEkinStd << ','
+      << blEkinMinOut << ','
+      << blEkinMaxOut;
+    PingPongTrackStats::logLine(s.str());
   }
 }
 
@@ -190,6 +352,41 @@ void SteppingLoop::ConfigureGrazingStopPolicy(bool disableFullTrack) {
   gGrazingStopsFullTrack = disableFullTrack;
 }
 
+void SteppingLoop::FlushBoundaryStatsForEvent(int eventID, double eventEdep, const G4double* layerEdep, int numLayers) {
+  if (!outputboundarylayers) {
+    return;
+  }
+  auto it = gBoundaryStatsByEvent.find(eventID);
+  if (it == gBoundaryStatsByEvent.end()) {
+    return;
+  }
+  const BoundaryEventAgg& agg = it->second;
+  std::ostringstream statss;
+  statss << eventID << ','
+         << agg.numTracks << ','
+         << agg.totalSteps << ','
+         << agg.totalStepsBack << ','
+         << agg.totalStepsForward << ','
+         << agg.boundarySteps << ','
+         << agg.boundaryStepsBack << ','
+         << agg.boundaryStepsForward << ','
+         << eventEdep << ','
+         << agg.stepLengthDot;
+  for (int i = 0; i < 50; ++i) {
+    if (layerEdep != nullptr && i < numLayers) {
+      statss << ',' << GET_VALUE(layerEdep[i]);
+    } else {
+      statss << ',' << NAN;
+    }
+  }
+  statss << ','
+         << agg.maxConsecBoundary << ','
+         << agg.maxConsecBoundaryBack << ','
+         << agg.maxConsecBoundaryForward;
+  BoundaryStats::logLine(statss.str());
+  gBoundaryStatsByEvent.erase(it);
+}
+
 
 //
 // NOTE: we always calculate the distance to boundary and the pre-step point safety
@@ -222,7 +419,10 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     DisableTrackGradient(*theTrack);
   }
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
+  const double initVx = GET_VALUE(theTrack->GetDirection()[0]);
   int totalSteps = 0;
+  int totalStepsBack = 0;
+  int totalStepsForward = 0;
   int boundarySteps = 0;
   int boundaryStepsBack = 0;
   int boundaryStepsForward = 0;
@@ -232,6 +432,14 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
   int maxConsecBoundary = 0;
   int maxConsecBoundaryBack = 0;
   int maxConsecBoundaryForward = 0;
+  int nFlipVx = 0;
+  int prevVxSign = 0;
+  bool hasPrevVxSign = false;
+  int blEkinCount = 0;
+  double blEkinSum = 0.0;
+  double blEkinSqSum = 0.0;
+  double blEkinMin = std::numeric_limits<double>::infinity();
+  double blEkinMax = -std::numeric_limits<double>::infinity();
 
   while (theTrack->GetEKin() > 0.0) {
     if (stop_tracking) {
@@ -261,13 +469,37 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
     // STOP HERE IF `distToBoundary = 1.0E+20` i.e. we are going out from the Calorimeter
     if (distToBoundary > 1.0E+10) {
+      LogTrackPingPongStats(
+          eventID,
+          *theTrack,
+          creationStep,
+          totalSteps,
+          totalStepsBack,
+          boundarySteps,
+          boundaryStepsBack,
+          nFlipVx,
+          maxConsecBoundary,
+          maxConsecBoundaryBack,
+          maxConsecBoundaryForward,
+          initVx,
+          blEkinCount,
+          blEkinSum,
+          blEkinSqSum,
+          blEkinMin,
+          blEkinMax);
       if (outputboundarylayers) {
-        std::ostringstream statss;
-        statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-               << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << NAN << ','<< NAN << ',' << NAN << ','
-               << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
-        BoundaryStats::logLine(statss.str());
-
+        AccumulateBoundaryTrackStats(
+            eventID,
+            totalSteps,
+            totalStepsBack,
+            totalStepsForward,
+            boundarySteps,
+            boundaryStepsBack,
+            boundaryStepsForward,
+            NAN,
+            maxConsecBoundary,
+            maxConsecBoundaryBack,
+            maxConsecBoundaryForward);
       }
       return;
     }
@@ -302,6 +534,14 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
 
         
     const G4double stepVx = theTrack->GetDirection()[0];
+    const int vxSign = VxSign(GET_VALUE(stepVx));
+    if (vxSign != 0) {
+      if (hasPrevVxSign && vxSign != prevVxSign) {
+        ++nFlipVx;
+      }
+      prevVxSign = vxSign;
+      hasPrevVxSign = true;
+    }
     const bool isBackward = stepVx < 0.0;
     const bool isGrazing = AbsValue(stepVx) < vxThreshold;
     const bool isUnsafeBackward = isBackward;
@@ -344,10 +584,21 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     // update the `onBoundary` falg
     theTrack->SetOnBoundary(onBoundary);
     ++totalSteps;
+    if (stepVx < 0.0) {
+      ++totalStepsBack;
+    } else {
+      ++totalStepsForward;
+    }
     if (onBoundary) {
       ++boundarySteps;
       ++consecBoundary;
       if (consecBoundary > maxConsecBoundary) maxConsecBoundary = consecBoundary;
+      const double stepEkin = GET_VALUE(theTrack->GetEKin());
+      ++blEkinCount;
+      blEkinSum += stepEkin;
+      blEkinSqSum += stepEkin * stepEkin;
+      if (stepEkin < blEkinMin) blEkinMin = stepEkin;
+      if (stepEkin > blEkinMax) blEkinMax = stepEkin;
       if (theTrack->GetDirection()[0] < 0.0) {
         ++boundaryStepsBack;
         ++consecBoundaryBack;
@@ -425,18 +676,37 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     SteppingAction(theResult, *theTrack, currentVolume, stepLength, indxLayer, indxAbs, eventID, numStep);
     ++numStep;
   }
+  LogTrackPingPongStats(
+      eventID,
+      *theTrack,
+      creationStep,
+      totalSteps,
+      totalStepsBack,
+      boundarySteps,
+      boundaryStepsBack,
+      nFlipVx,
+      maxConsecBoundary,
+      maxConsecBoundaryBack,
+      maxConsecBoundaryForward,
+      initVx,
+      blEkinCount,
+      blEkinSum,
+      blEkinSqSum,
+      blEkinMin,
+      blEkinMax);
   if (outputboundarylayers) {
-    G4double edepDot = 0.0;
-    G4double stepDot = 0.0;
-    #ifdef CODI_FORWARD
-      edepDot = GET_DOTVALUE(theTrack->GetEnergyDeposit());
-      stepDot = GET_DOTVALUE(theTrack->GetGStepLength());
-    #endif
-    std::ostringstream statss;
-    statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' <<  edepDot << ',' << stepDot << ','
-          << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
-    BoundaryStats::logLine(statss.str());
+    AccumulateBoundaryTrackStats(
+        eventID,
+        totalSteps,
+        totalStepsBack,
+        totalStepsForward,
+        boundarySteps,
+        boundaryStepsBack,
+        boundaryStepsForward,
+        ScalarDotValue(theTrack->GetGStepLength()),
+        maxConsecBoundary,
+        maxConsecBoundaryBack,
+        maxConsecBoundaryForward);
   }
 }
 
@@ -461,7 +731,10 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
   bool wasOnBoundary = false;
 //  bool wasPushed     = false;
   const int creationStep = theTrackStack.GetTrackCreationStep(theTrack->GetID());
+  const double initVx = GET_VALUE(theTrack->GetDirection()[0]);
   int totalSteps = 0;
+  int totalStepsBack = 0;
+  int totalStepsForward = 0;
   int boundarySteps = 0;
   int boundaryStepsBack = 0;
   int boundaryStepsForward = 0;
@@ -471,6 +744,14 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
   int maxConsecBoundary = 0;
   int maxConsecBoundaryBack = 0;
   int maxConsecBoundaryForward = 0;
+  int nFlipVx = 0;
+  int prevVxSign = 0;
+  bool hasPrevVxSign = false;
+  int blEkinCount = 0;
+  double blEkinSum = 0.0;
+  double blEkinSqSum = 0.0;
+  double blEkinMin = std::numeric_limits<double>::infinity();
+  double blEkinMax = -std::numeric_limits<double>::infinity();
 
   // keep tracking while the kinetic energy drops to zero (i.e. e-/e+ lose all its energy; e+ annihilates)
   // unless the track is going out of the Calorimeter
@@ -507,12 +788,37 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     G4double distToBoundary = theGeometry.CalculateDistanceToOut(localPosition, curDirection, &currentVolume, &indxLayer, &indxAbs);
     // STOP HERE IF `distToBoundary = 1.0E+20` i.e. we are going out from the Calorimeter
     if (distToBoundary > 1.0E+10) {
+      LogTrackPingPongStats(
+          eventID,
+          *theTrack,
+          creationStep,
+          totalSteps,
+          totalStepsBack,
+          boundarySteps,
+          boundaryStepsBack,
+          nFlipVx,
+          maxConsecBoundary,
+          maxConsecBoundaryBack,
+          maxConsecBoundaryForward,
+          initVx,
+          blEkinCount,
+          blEkinSum,
+          blEkinSqSum,
+          blEkinMin,
+          blEkinMax);
       if (outputboundarylayers){
-        std::ostringstream statss;
-        statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-              << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << NAN << ',' << NAN << ',' << NAN << ','
-              << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
-        BoundaryStats::logLine(statss.str());
+        AccumulateBoundaryTrackStats(
+            eventID,
+            totalSteps,
+            totalStepsBack,
+            totalStepsForward,
+            boundarySteps,
+            boundaryStepsBack,
+            boundaryStepsForward,
+            NAN,
+            maxConsecBoundary,
+            maxConsecBoundaryBack,
+            maxConsecBoundaryForward);
       } 
       return;
     }
@@ -559,6 +865,14 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     }
     
     const G4double stepVx = theTrack->GetDirection()[0];
+    const int vxSign = VxSign(GET_VALUE(stepVx));
+    if (vxSign != 0) {
+      if (hasPrevVxSign && vxSign != prevVxSign) {
+        ++nFlipVx;
+      }
+      prevVxSign = vxSign;
+      hasPrevVxSign = true;
+    }
     const bool isBackward = stepVx < 0.0;
     const bool isGrazing = AbsValue(stepVx) < vxThreshold;
     const bool isUnsafeBackward = isBackward;
@@ -604,10 +918,21 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     // update the `onBoundary` falg
     theTrack->SetOnBoundary(onBoundary);
     ++totalSteps;
+    if (stepVx < 0.0) {
+      ++totalStepsBack;
+    } else {
+      ++totalStepsForward;
+    }
     if (onBoundary) {
       ++boundarySteps;
       ++consecBoundary;
       if (consecBoundary > maxConsecBoundary) maxConsecBoundary = consecBoundary;
+      const double stepEkin = GET_VALUE(theTrack->GetEKin());
+      ++blEkinCount;
+      blEkinSum += stepEkin;
+      blEkinSqSum += stepEkin * stepEkin;
+      if (stepEkin < blEkinMin) blEkinMin = stepEkin;
+      if (stepEkin > blEkinMax) blEkinMax = stepEkin;
       if (theTrack->GetDirection()[0] < 0.0) {
         ++boundaryStepsBack;
         ++consecBoundaryBack;
@@ -738,18 +1063,37 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     wasOnBoundary = onBoundary;
     ++numStep;
   }
+  LogTrackPingPongStats(
+      eventID,
+      *theTrack,
+      creationStep,
+      totalSteps,
+      totalStepsBack,
+      boundarySteps,
+      boundaryStepsBack,
+      nFlipVx,
+      maxConsecBoundary,
+      maxConsecBoundaryBack,
+      maxConsecBoundaryForward,
+      initVx,
+      blEkinCount,
+      blEkinSum,
+      blEkinSqSum,
+      blEkinMin,
+      blEkinMax);
   if (outputboundarylayers) {
-    G4double edepDot = 0.0;
-    G4double stepDot = 0.0;
-    #ifdef CODI_FORWARD
-      edepDot = GET_DOTVALUE(theTrack->GetEnergyDeposit());
-      stepDot = GET_DOTVALUE(theTrack->GetGStepLength());
-    #endif
-    std::ostringstream statss;
-    statss << eventID << ',' << theTrack->GetCharge() << ',' << theTrack->GetID() << ','
-          << totalSteps << ',' << boundarySteps << ',' << boundaryStepsBack << ',' << boundaryStepsForward << ',' << theTrack->GetEnergyDeposit() << ',' << edepDot << ',' << stepDot << ','
-          << maxConsecBoundary << ',' << maxConsecBoundaryBack << ',' << maxConsecBoundaryForward;
-    BoundaryStats::logLine(statss.str());
+    AccumulateBoundaryTrackStats(
+        eventID,
+        totalSteps,
+        totalStepsBack,
+        totalStepsForward,
+        boundarySteps,
+        boundaryStepsBack,
+        boundaryStepsForward,
+        ScalarDotValue(theTrack->GetGStepLength()),
+        maxConsecBoundary,
+        maxConsecBoundaryBack,
+        maxConsecBoundaryForward);
   }
 }
 

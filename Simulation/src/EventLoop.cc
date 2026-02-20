@@ -165,6 +165,13 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
     //
   // 4. Call the end of event action
   EndOfEventAction(theResult, eventID);
+  G4double eventEdepExpr = theResult.fPerEventRes.fEdepAbs + theResult.fPerEventRes.fEdepGap;
+  double eventEdep = GET_VALUE(eventEdepExpr);
+  SteppingLoop::FlushBoundaryStatsForEvent(
+      eventID,
+      eventEdep,
+      theResult.fEdepPerLayer_CurrentEvent.GetY().data(),
+      theResult.fEdepPerLayer_CurrentEvent.GetNumBins());
   VxEdepHist::EndEvent();
     //
     // increase the event ID (i.e. counter of simulated events)

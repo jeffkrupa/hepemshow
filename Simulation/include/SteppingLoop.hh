@@ -142,6 +142,9 @@ public:
   /** Choose if grazing unsafe steps disable gradients for the full track (true) or current-step state only (false). */
   static void ConfigureGrazingStopPolicy(bool disableFullTrack);
 
+  /** Flush aggregated boundary statistics for one event as a single output row. */
+  static void FlushBoundaryStatsForEvent(int eventID, double eventEdep, const G4double* layerEdep, int numLayers);
+
 private:
   SteppingLoop() = delete;
 
