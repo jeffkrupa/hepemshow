@@ -41,6 +41,7 @@
 #include "G4HepEmData.hh"
 #include "G4HepEmParameters.hh"
 #include "G4HepEmMatCutData.hh"
+#include "G4HepEmElectronInteractionUMSC.hh"
 
 // - from G4HepEm/G4HepEmDataJsonIO: data IO (i.e. to load the pre-generated data)
 #include "G4HepEmDataJsonIO.hh"
@@ -101,6 +102,7 @@ int main(int argc, char* argv[]) {
   //  here we construct the application geometry and set its configurable properties like
   //  #layers, thickness of absorber and gap, etc.
   Geometry theGeometry;
+  Geometry::SetBoundaryTolerance(theInputParameters.fBoundaryTolerance);
   theGeometry.SetNumLayers(theInputParameters.fGeometry.fNumLayers);
   theGeometry.SetAbsThick(theInputParameters.fGeometry.fThicknessAbsorber);
   theGeometry.SetGapThick(theInputParameters.fGeometry.fThicknessGap);
@@ -145,6 +147,14 @@ int main(int argc, char* argv[]) {
   // here we start the event processing: generate the required number of event and simulte each event.
   SteppingLoop::SetGradientStopMode(theInputParameters.fGradientStopMode);
   SteppingLoop::ConfigureGrazingStopPolicy(theInputParameters.fGrazingStopsTrack);
+  SteppingLoop::ConfigureMscDisplacement(theInputParameters.fEnableMscDisplacement, theInputParameters.fMscDisplacementSafetyFloor);
+  SteppingLoop::ConfigureSameBoundaryStop(
+      theInputParameters.fSameBoundaryStop,
+      theInputParameters.fSameBoundaryPosTolerance,
+      theInputParameters.fSameBoundaryMinFlips,
+      theInputParameters.fSameBoundaryFullTrackStop,
+      theInputParameters.fSameBoundaryHardStop);
+  G4HepEmElectronInteractionUMSC::ConfigureStepRandomization(theInputParameters.fEnableMscStepRandomization);
   SteppingLoop::ConfigureKECut(theInputParameters.fEnableKECut, theInputParameters.fKECut);
   EventLoop::ProcessEvents(*theTLData, *theState, thePrimaryGenerator, theGeometry, theResult, theInputParameters.fPrimaryAndEvents.fNumEvents, theInputParameters.fRunVerbosity, theInputParameters.fThreshold, theInputParameters.fThreshold2);
 
