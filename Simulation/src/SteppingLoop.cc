@@ -42,8 +42,8 @@ namespace {
 }
 
 bool outputall = false;
-bool outputboundarylayers = true;
-bool outputpingpongtracks = true;
+bool outputboundarylayers = false;
+bool outputpingpongtracks = false;
 bool outputvx = false;
 ;
 struct MicroAudit {
@@ -101,6 +101,13 @@ namespace {
   std::unordered_set<int> gDisabledTrackGradients;
   int gGradientStopMode = 2;
   bool gGrazingStopsFullTrack = true;
+  bool gEnableMscDisplacement = true;
+  G4double gMscDisplacementSafetyFloor = 0.0;
+  int gSameBoundaryStopThreshold = 0;
+  G4double gSameBoundaryPositionTolerance = 1.0E-6;
+  int gSameBoundaryMinFlips = 1;
+  bool gSameBoundaryFullTrackStop = false;
+  int gSameBoundaryHardStopThreshold = 0;
   const G4double kDefaultNearBoundarySafety = 5.0E-6;
 
   struct VxStats {
@@ -237,6 +244,16 @@ namespace {
     return 0;
   }
 
+  inline double BoundaryXValue(const G4double* globalPosition, const G4double* direction, const G4double& stepLength) {
+    return GET_VALUE(globalPosition[0] + stepLength * direction[0]);
+  }
+
+  inline long long BoundaryKeyFromX(double boundaryX) {
+    const double tolValue = GET_VALUE(gSameBoundaryPositionTolerance);
+    const double tol = tolValue > 0.0 ? tolValue : 1.0E-6;
+    return static_cast<long long>(std::llround(boundaryX / tol));
+  }
+
   inline void LogTrackPingPongStats(
       int eventID,
       G4HepEmTrack& track,
@@ -352,6 +369,19 @@ void SteppingLoop::ConfigureGrazingStopPolicy(bool disableFullTrack) {
   gGrazingStopsFullTrack = disableFullTrack;
 }
 
+void SteppingLoop::ConfigureMscDisplacement(bool enable, G4double postSafetyFloor) {
+  gEnableMscDisplacement = enable;
+  gMscDisplacementSafetyFloor = postSafetyFloor < 0.0 ? 0.0 : postSafetyFloor;
+}
+
+void SteppingLoop::ConfigureSameBoundaryStop(int repeatThreshold, G4double positionTolerance, int minFlips, bool fullTrackStop, int hardStopThreshold) {
+  gSameBoundaryStopThreshold = repeatThreshold > 0 ? repeatThreshold : 0;
+  gSameBoundaryPositionTolerance = positionTolerance > 0.0 ? positionTolerance : 1.0E-6;
+  gSameBoundaryMinFlips = minFlips > 0 ? minFlips : 0;
+  gSameBoundaryFullTrackStop = fullTrackStop;
+  gSameBoundaryHardStopThreshold = hardStopThreshold > 0 ? hardStopThreshold : 0;
+}
+
 void SteppingLoop::FlushBoundaryStatsForEvent(int eventID, double eventEdep, const G4double* layerEdep, int numLayers) {
   if (!outputboundarylayers) {
     return;
@@ -440,6 +470,9 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
   double blEkinSqSum = 0.0;
   double blEkinMin = std::numeric_limits<double>::infinity();
   double blEkinMax = -std::numeric_limits<double>::infinity();
+  std::unordered_map<long long, int> sameBoundaryHitCount;
+  std::unordered_map<long long, int> sameBoundaryFlipCount;
+  std::unordered_map<long long, int> sameBoundaryLastVxSign;
 
   while (theTrack->GetEKin() > 0.0) {
     if (stop_tracking) {
@@ -508,7 +541,8 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
     localPosition[1] = stop_grad(localPosition[1]);  //FIX
     localPosition[2] = stop_grad(localPosition[2]);  //FIX
     const G4double preStepSafety  = currentVolume->DistanceToOut(localPosition);
-    bool onBoundary = (preStepSafety == 0.0);
+    const G4double boundaryTol = Geometry::GetBoundaryTolerance();
+    bool onBoundary = (preStepSafety <= boundaryTol);
     // get the material-cuts couple index from the volume
     const int indxMaterial = currentVolume->GetMaterialIndx();
     // set the fields needed for computing the physics step limit:
@@ -532,7 +566,19 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       onBoundary = false;
     }
 
-        
+    bool hasBoundaryKey = false;
+    long long boundaryKey = 0;
+    int sameBoundaryHits = 0;
+    int sameBoundaryFlips = 0;
+    if (onBoundary) {
+      const double boundaryX = BoundaryXValue(globalPosition, curDirection, stepLength);
+      boundaryKey = BoundaryKeyFromX(boundaryX);
+      hasBoundaryKey = true;
+      int& hitCount = sameBoundaryHitCount[boundaryKey];
+      ++hitCount;
+      sameBoundaryHits = hitCount;
+    }
+
     const G4double stepVx = theTrack->GetDirection()[0];
     const int vxSign = VxSign(GET_VALUE(stepVx));
     if (vxSign != 0) {
@@ -542,13 +588,33 @@ void SteppingLoop::GammaStepper(G4HepEmTLData& theTLData, G4HepEmState& theState
       prevVxSign = vxSign;
       hasPrevVxSign = true;
     }
+    if (onBoundary && hasBoundaryKey) {
+      sameBoundaryFlips = sameBoundaryFlipCount[boundaryKey];
+      if (vxSign != 0) {
+        int& lastSign = sameBoundaryLastVxSign[boundaryKey];
+        if (lastSign != 0 && lastSign != vxSign) {
+          int& flipCount = sameBoundaryFlipCount[boundaryKey];
+          ++flipCount;
+          sameBoundaryFlips = flipCount;
+        }
+        lastSign = vxSign;
+      }
+    }
     const bool isBackward = stepVx < 0.0;
     const bool isGrazing = AbsValue(stepVx) < vxThreshold;
-    const bool isUnsafeBackward = isBackward;
+    const bool isUnsafeBackward = isBackward && onBoundary;
     const bool isUnsafeGrazing = (onBoundary || (preStepSafety < nearBoundarySafety)) && isGrazing;
-    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing;
+    const bool reachedRepeatThreshold = onBoundary && (gSameBoundaryStopThreshold > 0) && (sameBoundaryHits >= gSameBoundaryStopThreshold);
+    const bool reachedFlipThreshold = (gSameBoundaryMinFlips <= 0) || (sameBoundaryFlips >= gSameBoundaryMinFlips);
+    const bool isUnsafeRepeatBoundary = reachedRepeatThreshold && reachedFlipThreshold;
+    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing || isUnsafeRepeatBoundary;
     if (isUnsafeStep) {
-      if (isUnsafeBackward || gGrazingStopsFullTrack) {
+      const bool fullTrackDueToBackward = isUnsafeBackward;
+      const bool fullTrackDueToGrazing = isUnsafeGrazing && gGrazingStopsFullTrack;
+      const bool fullTrackDueToRepeat = isUnsafeRepeatBoundary &&
+        (gSameBoundaryFullTrackStop ||
+         (gSameBoundaryHardStopThreshold > 0 && sameBoundaryHits >= gSameBoundaryHardStopThreshold));
+      if (fullTrackDueToBackward || fullTrackDueToGrazing || fullTrackDueToRepeat) {
         DisableTrackGradient(*theTrack);
         stop_tracking = true;
       } else {
@@ -752,6 +818,9 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
   double blEkinSqSum = 0.0;
   double blEkinMin = std::numeric_limits<double>::infinity();
   double blEkinMax = -std::numeric_limits<double>::infinity();
+  std::unordered_map<long long, int> sameBoundaryHitCount;
+  std::unordered_map<long long, int> sameBoundaryFlipCount;
+  std::unordered_map<long long, int> sameBoundaryLastVxSign;
 
   // keep tracking while the kinetic energy drops to zero (i.e. e-/e+ lose all its energy; e+ annihilates)
   // unless the track is going out of the Calorimeter
@@ -828,7 +897,9 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     localPosition[1] = stop_grad(localPosition[1]);  //FIX
     localPosition[2] = stop_grad(localPosition[2]);  //FIX
     G4double safety   = currentVolume->DistanceToOut(localPosition);
-    bool onBoundary = numStep == 0 ? (safety<5.0E-10) : wasOnBoundary;
+    const G4double boundaryTol = Geometry::GetBoundaryTolerance();
+    const G4double onBoundaryTol = boundaryTol > 0.0 ? boundaryTol : 5.0E-10;
+    bool onBoundary = numStep == 0 ? (safety <= onBoundaryTol) : wasOnBoundary;
     const G4double preStepSafety = onBoundary ? 0.0 : safety;
 
     // get the material-cuts couple index from the volume
@@ -863,6 +934,19 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
       stepLength = distToPhysics;
       onBoundary = false;
     }
+
+    bool hasBoundaryKey = false;
+    long long boundaryKey = 0;
+    int sameBoundaryHits = 0;
+    int sameBoundaryFlips = 0;
+    if (onBoundary) {
+      const double boundaryX = BoundaryXValue(globalPosition, curDirection, stepLength);
+      boundaryKey = BoundaryKeyFromX(boundaryX);
+      hasBoundaryKey = true;
+      int& hitCount = sameBoundaryHitCount[boundaryKey];
+      ++hitCount;
+      sameBoundaryHits = hitCount;
+    }
     
     const G4double stepVx = theTrack->GetDirection()[0];
     const int vxSign = VxSign(GET_VALUE(stepVx));
@@ -873,13 +957,33 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
       prevVxSign = vxSign;
       hasPrevVxSign = true;
     }
+    if (onBoundary && hasBoundaryKey) {
+      sameBoundaryFlips = sameBoundaryFlipCount[boundaryKey];
+      if (vxSign != 0) {
+        int& lastSign = sameBoundaryLastVxSign[boundaryKey];
+        if (lastSign != 0 && lastSign != vxSign) {
+          int& flipCount = sameBoundaryFlipCount[boundaryKey];
+          ++flipCount;
+          sameBoundaryFlips = flipCount;
+        }
+        lastSign = vxSign;
+      }
+    }
     const bool isBackward = stepVx < 0.0;
     const bool isGrazing = AbsValue(stepVx) < vxThreshold;
-    const bool isUnsafeBackward = isBackward;
+    const bool isUnsafeBackward = isBackward && onBoundary;
     const bool isUnsafeGrazing = (onBoundary || (preStepSafety < nearBoundarySafety)) && isGrazing;
-    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing;
+    const bool reachedRepeatThreshold = onBoundary && (gSameBoundaryStopThreshold > 0) && (sameBoundaryHits >= gSameBoundaryStopThreshold);
+    const bool reachedFlipThreshold = (gSameBoundaryMinFlips <= 0) || (sameBoundaryFlips >= gSameBoundaryMinFlips);
+    const bool isUnsafeRepeatBoundary = reachedRepeatThreshold && reachedFlipThreshold;
+    const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing || isUnsafeRepeatBoundary;
     if (isUnsafeStep) {
-      if (isUnsafeBackward || gGrazingStopsFullTrack) {
+      const bool fullTrackDueToBackward = isUnsafeBackward;
+      const bool fullTrackDueToGrazing = isUnsafeGrazing && gGrazingStopsFullTrack;
+      const bool fullTrackDueToRepeat = isUnsafeRepeatBoundary &&
+        (gSameBoundaryFullTrackStop ||
+         (gSameBoundaryHardStopThreshold > 0 && sameBoundaryHits >= gSameBoundaryHardStopThreshold));
+      if (fullTrackDueToBackward || fullTrackDueToGrazing || fullTrackDueToRepeat) {
         DisableTrackGradient(*theTrack);
         stop_tracking = true;
       } else {
@@ -986,7 +1090,7 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     G4double pre_MSC_gZ = globalPosition[2];
     G4double postSafety = -999;
 
-    if (!onBoundary) {
+    if (gEnableMscDisplacement && !onBoundary) {
       const G4double* displacement    = theMSCData->GetDisplacement();
       const G4double  dLength2        = displacement[0]*displacement[0] + displacement[1]*displacement[1] + displacement[2]*displacement[2];
       const G4double  kGeomMinLength  = 5.0e-8;  // 0.05 [nm]
@@ -1002,18 +1106,22 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
         localPosition[0] = stop_grad(localPosition[0]);  //FIX
         localPosition[1] = stop_grad(localPosition[1]);  //FIX
         localPosition[2] = stop_grad(localPosition[2]);  //FIX
-        const G4double postSafety = 0.99*currentVolume->DistanceToOut(localPosition);
-        if (postSafety > 0.0 && dispR < postSafety) {
+        postSafety = 0.99*currentVolume->DistanceToOut(localPosition);
+        G4double clipSafety = postSafety;
+        if (clipSafety > 0.0 && gMscDisplacementSafetyFloor > 0.0 && clipSafety < gMscDisplacementSafetyFloor) {
+          clipSafety = gMscDisplacementSafetyFloor;
+        }
+        if (clipSafety > 0.0 && dispR < clipSafety) {
           // far away from boundary: can be applied safely i.e. we won't get to boundary
           AddTo3Vect(globalPosition, displacement);
           //near the boundary
         } else {
           // displaced point is definitely within the volume
-          if (dispR < postSafety) {
+          if (dispR < clipSafety) {
             AddTo3Vect(globalPosition, displacement);
-          } else if(postSafety > kGeomMinLength) {
+          } else if (clipSafety > kGeomMinLength) {
             // reduced displacement
-            const G4double scale = (postSafety/dispR);
+            const G4double scale = (clipSafety/dispR);
             AddTo3Vect(globalPosition, displacement, scale);
           } // else {
             // very small postSafety

@@ -140,6 +140,12 @@ public:
   /** Destructor: deletes the Box objects that represents the volume of the components.*/
  ~Geometry();
 
+  /** Sets a non-negative boundary tolerance [mm] used in boundary-zero checks. */
+  static void SetBoundaryTolerance(G4double tol);
+
+  /** Returns the boundary tolerance [mm] used in boundary-zero checks. */
+  static G4double GetBoundaryTolerance();
+
   /** Sets the number of layers the entire calorimeter should be built up.
     * @param[in]  nlayers Number of layers (must be > 0) requested (all parameters are recalculated).
     */

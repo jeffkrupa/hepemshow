@@ -33,7 +33,16 @@ struct InputParameters {
     fGrazingStopsTrack(true),
     fGradientStopMode(2),
     fEnableKECut(false),
-    fKECut(0.5) {}  //FIX
+    fKECut(0.5),
+    fEnableMscDisplacement(true),
+    fEnableMscStepRandomization(true),
+    fBoundaryTolerance(0.0),
+    fMscDisplacementSafetyFloor(0.0),
+    fSameBoundaryStop(0),
+    fSameBoundaryPosTolerance(1.0E-6),
+    fSameBoundaryMinFlips(1),
+    fSameBoundaryFullTrackStop(false),
+    fSameBoundaryHardStop(0) {}  //FIX
 
 
   /** The geometry related input arguments.*/
@@ -80,6 +89,15 @@ struct InputParameters {
   int fGradientStopMode;   ///< 0: keep gradients, 1: stop on current track, 2: stop on track and descendants
   bool fEnableKECut;       ///< apply kinetic-energy cut when true
   G4double fKECut;         ///< threshold value for kinetic-energy cut in [MeV]
+  bool fEnableMscDisplacement;     ///< apply MSC lateral displacement in transport when true
+  bool fEnableMscStepRandomization; ///< randomize UMSC step limit with Gaussian smearing when true
+  G4double fBoundaryTolerance;      ///< boundary tolerance [mm] for zero-distance checks
+  G4double fMscDisplacementSafetyFloor; ///< floor [mm] applied to displacement clipping safety
+  int fSameBoundaryStop;            ///< total same-boundary hits over track history that trigger stop-grad (0 disables)
+  G4double fSameBoundaryPosTolerance; ///< tolerance [mm] for matching repeated boundary x-planes
+  int fSameBoundaryMinFlips;        ///< minimum number of vx sign flips observed on the same boundary over track history
+  bool fSameBoundaryFullTrackStop;  ///< if true, same-boundary trigger disables full track instead of step-local sanitize
+  int fSameBoundaryHardStop;        ///< hard full-track stop threshold on total hits of the same boundary (0 disables)
   #ifdef CODI_REVERSE
     std::vector<double> barEdep;     ///< Bar values of the energy depositions
   #endif
@@ -108,6 +126,15 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - threshold2           : "     << theParam.fThreshold2       << " (near-boundary safety [mm], <=0 uses default)" << std::endl;
   std::cout << "         - grazing-stop-track   : "     << (theParam.fGrazingStopsTrack ? 1 : 0) << std::endl;
   std::cout << "         - stop-grad-mode       : "     << theParam.fGradientStopMode << std::endl;
+  std::cout << "         - msc-displacement     : "     << (theParam.fEnableMscDisplacement ? 1 : 0) << std::endl;
+  std::cout << "         - msc-step-random      : "     << (theParam.fEnableMscStepRandomization ? 1 : 0) << std::endl;
+  std::cout << "         - boundary-tolerance   : "     << theParam.fBoundaryTolerance << " [mm]" << std::endl;
+  std::cout << "         - msc-disp-safe-floor  : "     << theParam.fMscDisplacementSafetyFloor << " [mm]" << std::endl;
+  std::cout << "         - same-boundary-stop   : "     << theParam.fSameBoundaryStop << " (total hits over track history, 0=off)" << std::endl;
+  std::cout << "         - same-boundary-pos-tol: "     << theParam.fSameBoundaryPosTolerance << " [mm]" << std::endl;
+  std::cout << "         - same-boundary-min-flips: "   << theParam.fSameBoundaryMinFlips << std::endl;
+  std::cout << "         - same-boundary-full-track: "  << (theParam.fSameBoundaryFullTrackStop ? 1 : 0) << std::endl;
+  std::cout << "         - same-boundary-hard-stop: "   << theParam.fSameBoundaryHardStop << " (0=off)" << std::endl;
   std::cout << "         - ke-cut-threshold    : ";
   if (theParam.fEnableKECut) {
     std::cout << theParam.fKECut << " [MeV]" << std::endl;
@@ -139,6 +166,15 @@ static struct option options[] = {
   {"threshold             (|vx| threshold for grazing condition) - default: 0.1"              , required_argument, 0, 'f'},
   {"threshold2            (near-boundary safety threshold [mm], <=0 uses internal default) - default:-1.0", required_argument, 0, 'k'},
   {"grazing-stop-track    (1: disable gradient for full track, 0: current-step sanitize only) - default: 1", required_argument, 0, 'y'},
+  {"msc-displacement      (1: enable MSC lateral displacement, 0: disable) - default: 1"    , required_argument, 0, 'm'},
+  {"msc-step-random       (1: enable UMSC step-limit randomization, 0: deterministic) - default: 1", required_argument, 0, 'r'},
+  {"boundary-tolerance    (distance-to-boundary tolerance in [mm]) - default: 0.0"           , required_argument, 0, 'u'},
+  {"msc-disp-safe-floor   (post-step safety floor [mm] for displacement clipping) - default: 0.0", required_argument, 0, 'w'},
+  {"same-boundary-stop    (stop-grad after N total hits of same x-boundary plane over track history, 0 disables) - default: 0", required_argument, 0, 'q'},
+  {"same-boundary-pos-tol (tolerance [mm] to identify same x-boundary plane) - default: 1e-6", required_argument, 0, 'z'},
+  {"same-boundary-min-flips (minimum vx sign flips on same boundary over track history before triggering) - default: 1", required_argument, 0, 'j'},
+  {"same-boundary-full-track (1: full-track stopgrad on same-boundary trigger, 0: step-local sanitize) - default: 0", required_argument, 0, 'o'},
+  {"same-boundary-hard-stop (full-track stopgrad when total hits on same boundary reach this count; 0 disables) - default: 0", required_argument, 0, 'i'},
   {"ke-cut-threshold      (set kinetic energy cut in [MeV], disabled when absent)"            , required_argument, 0, 'c'},
   {"stop-grad-mode (0:none,1:track,2:track+desc) - default: 2"         , required_argument, 0, 'x'},
   {"help"                                                                                    , no_argument      , 0, 'h'},
@@ -193,7 +229,7 @@ static inline G4double parseRealInput(const char* arg){
 void GetOpt(int argc, char *argv[], InputParameters& param) {
   while (true) {
     int c, optidx = 0;
-    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:c:x:", options, &optidx);
+    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:m:r:u:w:q:z:j:o:i:c:x:", options, &optidx);
     if (c == -1)
       break;
     switch (c) {
@@ -272,6 +308,96 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
          exit(-1);
        }
        param.fGrazingStopsTrack = (flag == 1);
+       break;
+    }
+    case 'm': {
+       const int flag = std::stoi(optarg);
+       if (flag != 0 && flag != 1) {
+         std::cerr << "msc-displacement must be 0 or 1: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fEnableMscDisplacement = (flag == 1);
+       break;
+    }
+    case 'r': {
+       const int flag = std::stoi(optarg);
+       if (flag != 0 && flag != 1) {
+         std::cerr << "msc-step-random must be 0 or 1: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fEnableMscStepRandomization = (flag == 1);
+       break;
+    }
+    case 'u': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "boundary-tolerance must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fBoundaryTolerance = value;
+       break;
+    }
+    case 'w': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "msc-disp-safe-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fMscDisplacementSafetyFloor = value;
+       break;
+    }
+    case 'q': {
+       const int value = std::stoi(optarg);
+       if (value < 0) {
+         std::cerr << "same-boundary-stop must be >= 0: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fSameBoundaryStop = value;
+       break;
+    }
+    case 'z': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "same-boundary-pos-tol must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fSameBoundaryPosTolerance = value;
+       break;
+    }
+    case 'j': {
+       const int value = std::stoi(optarg);
+       if (value < 0) {
+         std::cerr << "same-boundary-min-flips must be >= 0: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fSameBoundaryMinFlips = value;
+       break;
+    }
+    case 'o': {
+       const int flag = std::stoi(optarg);
+       if (flag != 0 && flag != 1) {
+         std::cerr << "same-boundary-full-track must be 0 or 1: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fSameBoundaryFullTrackStop = (flag == 1);
+       break;
+    }
+    case 'i': {
+       const int value = std::stoi(optarg);
+       if (value < 0) {
+         std::cerr << "same-boundary-hard-stop must be >= 0: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fSameBoundaryHardStop = value;
        break;
     }
     case 'c': {

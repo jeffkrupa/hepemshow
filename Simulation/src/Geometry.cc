@@ -6,6 +6,7 @@
 #include "Box.hh"
 
 #include <iostream>
+#include <algorithm>
 
 template<typename Expr>
 inline G4double stop_grad(const Expr& x) {
@@ -13,6 +14,17 @@ inline G4double stop_grad(const Expr& x) {
   return G4double(GET_VALUE(x));
 }
 G4double fCaloOffsetX;
+namespace {
+  G4double gBoundaryTolerance = 0.0;
+}
+
+void Geometry::SetBoundaryTolerance(G4double tol) {
+  gBoundaryTolerance = std::max<G4double>(0.0, tol);
+}
+
+G4double Geometry::GetBoundaryTolerance() {
+  return gBoundaryTolerance;
+}
 
 Geometry::Geometry() {
   // default values: 50 layers of 2.3 [mm] absorber (PbWO4) and 5.7 [mm] gap (lAr)
@@ -94,6 +106,7 @@ void Geometry::UpdateParameters() {
 
 // note: try to keep this more verbose than fast to keep it clear
 G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** currentVolume, int* indxLayer, int* indxAbs) {
+  const G4double boundaryTol = gBoundaryTolerance;
   // init everything to a step in the `world` case
   *currentVolume = fBoxWorld;
   *indxLayer     = -1;
@@ -106,7 +119,7 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   r[0] = r[0] - 0.5 * fCaloThick; //FIX
   const G4double dToCalo = fBoxCalo->DistanceToOut(r, v);
   // check if about leaving the calorimeter volume: distance to out is zero
-  if (dToCalo == 0.0) {
+  if (dToCalo <= boundaryTol) {
     // currentVolume is already set to `world`
     return 1.0E+20;
   }
@@ -123,7 +136,7 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   // calculate the distance to the `layer` boundary along the given direction
   // why: tolerance and direction was not considered! So to detect here that
   //      the point is actually miss-located (distance is zero in that case.)
-  if (fBoxLayer->DistanceToOut(r, v) == 0.0) {
+  if (fBoxLayer->DistanceToOut(r, v) <= boundaryTol) {
     return 0.0;
     // NOTE: I could also push here and do recursion but keep it clear and push only in the steppers
   }

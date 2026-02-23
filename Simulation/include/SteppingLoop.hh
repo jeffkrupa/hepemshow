@@ -142,6 +142,12 @@ public:
   /** Choose if grazing unsafe steps disable gradients for the full track (true) or current-step state only (false). */
   static void ConfigureGrazingStopPolicy(bool disableFullTrack);
 
+  /** Configure if MSC displacement should be applied and the optional post-safety floor [mm]. */
+  static void ConfigureMscDisplacement(bool enable, G4double postSafetyFloor);
+
+  /** Configure boundary ping-pong mitigation based on repeated hits of the same x-boundary plane over a track history. */
+  static void ConfigureSameBoundaryStop(int repeatThreshold, G4double positionTolerance, int minFlips, bool fullTrackStop, int hardStopThreshold);
+
   /** Flush aggregated boundary statistics for one event as a single output row. */
   static void FlushBoundaryStatsForEvent(int eventID, double eventEdep, const G4double* layerEdep, int numLayers);
 
