@@ -146,6 +146,12 @@ public:
   /** Returns the boundary tolerance [mm] used in boundary-zero checks. */
   static G4double GetBoundaryTolerance();
 
+  /** Set per-call debug context for geometry distance logging. */
+  static void SetDistanceDebugContext(int eventID, int trackID, int parentID, int stepID, const char* stage);
+
+  /** Clear geometry distance logging context. */
+  static void ClearDistanceDebugContext();
+
   /** Sets the number of layers the entire calorimeter should be built up.
     * @param[in]  nlayers Number of layers (must be > 0) requested (all parameters are recalculated).
     */

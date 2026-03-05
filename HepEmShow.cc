@@ -42,6 +42,9 @@
 #include "G4HepEmParameters.hh"
 #include "G4HepEmMatCutData.hh"
 #include "G4HepEmElectronInteractionUMSC.hh"
+#include "G4HepEmElectronManager.hh"
+#include "G4HepEmGammaManager.hh"
+#include "G4HepEmRunUtils.hh"
 
 // - from G4HepEm/G4HepEmDataJsonIO: data IO (i.e. to load the pre-generated data)
 #include "G4HepEmDataJsonIO.hh"
@@ -54,6 +57,7 @@
 // Local includes:
 #include "InputParameters.hh"
 #include "Geometry.hh"
+#include "Box.hh"
 #include "PrimaryGenerator.hh"
 #include "Results.hh"
 #include "EventLoop.hh"
@@ -103,6 +107,7 @@ int main(int argc, char* argv[]) {
   //  #layers, thickness of absorber and gap, etc.
   Geometry theGeometry;
   Geometry::SetBoundaryTolerance(theInputParameters.fBoundaryTolerance);
+  Box::ConfigureDistanceToOutDerivativeRegularization(theInputParameters.fBoxDirDenFloor);
   theGeometry.SetNumLayers(theInputParameters.fGeometry.fNumLayers);
   theGeometry.SetAbsThick(theInputParameters.fGeometry.fThicknessAbsorber);
   theGeometry.SetGapThick(theInputParameters.fGeometry.fThicknessGap);
@@ -147,6 +152,7 @@ int main(int argc, char* argv[]) {
   // here we start the event processing: generate the required number of event and simulte each event.
   SteppingLoop::SetGradientStopMode(theInputParameters.fGradientStopMode);
   SteppingLoop::ConfigureGrazingStopPolicy(theInputParameters.fGrazingStopsTrack);
+  SteppingLoop::ConfigureBackwardBoundaryStop(theInputParameters.fBackwardBoundaryStop);
   SteppingLoop::ConfigureMscDisplacement(theInputParameters.fEnableMscDisplacement, theInputParameters.fMscDisplacementSafetyFloor);
   SteppingLoop::ConfigureSameBoundaryStop(
       theInputParameters.fSameBoundaryStop,
@@ -154,7 +160,17 @@ int main(int argc, char* argv[]) {
       theInputParameters.fSameBoundaryMinFlips,
       theInputParameters.fSameBoundaryFullTrackStop,
       theInputParameters.fSameBoundaryHardStop);
+  G4HepEmElectronManager::ConfigureNumIALeftDerivativeRegularization(theInputParameters.fNumIALeftMfpFloor);
+  G4HepEmGammaManager::ConfigureNumIALeftDerivativeRegularization(theInputParameters.fGammaNumIALeftMfpFloor);
+  G4HepEmGammaManager::ConfigurePhotoelectricDerivativeRegularization(theInputParameters.fGammaPhotoelectricEkinFloor);
+  ConfigureRotateUpDerivativeFloor(theInputParameters.fRotateUpDerivativeFloor);
+  G4HepEmElectronManager::ConfigureConversionDerivativeRegularization(theInputParameters.fConversionDerivativeEpsilon);
   G4HepEmElectronInteractionUMSC::ConfigureStepRandomization(theInputParameters.fEnableMscStepRandomization);
+  G4HepEmElectronInteractionUMSC::ConfigureDerivativeRegularization(
+      theInputParameters.fUmscCosThetaDenFloor,
+      theInputParameters.fUmscTauBlendEpsilon,
+      theInputParameters.fUmscSimpleDenFloor,
+      theInputParameters.fUmscDispRadFloor);
   SteppingLoop::ConfigureKECut(theInputParameters.fEnableKECut, theInputParameters.fKECut);
   EventLoop::ProcessEvents(*theTLData, *theState, thePrimaryGenerator, theGeometry, theResult, theInputParameters.fPrimaryAndEvents.fNumEvents, theInputParameters.fRunVerbosity, theInputParameters.fThreshold, theInputParameters.fThreshold2);
 

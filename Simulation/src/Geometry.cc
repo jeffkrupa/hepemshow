@@ -7,6 +7,10 @@
 
 #include <iostream>
 #include <algorithm>
+#include <fstream>
+#include <cstdlib>
+#include <string>
+#include <limits>
 
 template<typename Expr>
 inline G4double stop_grad(const Expr& x) {
@@ -16,6 +20,135 @@ inline G4double stop_grad(const Expr& x) {
 G4double fCaloOffsetX;
 namespace {
   G4double gBoundaryTolerance = 0.0;
+
+  struct GeometryDebugContext {
+    bool active = false;
+    int eventID = -1;
+    int trackID = -1;
+    int parentID = -1;
+    int stepID = -1;
+    std::string stage;
+  };
+
+  GeometryDebugContext& GetGeometryDebugContext() {
+    static thread_local GeometryDebugContext ctx;
+    return ctx;
+  }
+
+  int ReadEnvInt(const char* key, int defaultValue) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr || *raw == '\0') {
+      return defaultValue;
+    }
+    char* endPtr = nullptr;
+    const long parsed = std::strtol(raw, &endPtr, 10);
+    if (endPtr == raw) {
+      return defaultValue;
+    }
+    return static_cast<int>(parsed);
+  }
+
+  const char* ReadEnvStr(const char* key, const char* defaultValue) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr || *raw == '\0') {
+      return defaultValue;
+    }
+    return raw;
+  }
+
+  int GeomDebugTrackId() {
+    static const int kTrackId = ReadEnvInt("HEPEMSHOW_GEOM_DEBUG_TRACK_ID", -1);
+    return kTrackId;
+  }
+
+  bool IsGeometryDebugEnabled() {
+    static const int kEnabled = ReadEnvInt("HEPEMSHOW_ENABLE_DEBUG_LOGS", 0);
+    return kEnabled != 0;
+  }
+
+  bool ShouldLogGeometry() {
+    if (!IsGeometryDebugEnabled()) {
+      return false;
+    }
+    const GeometryDebugContext& ctx = GetGeometryDebugContext();
+    const int target = GeomDebugTrackId();
+    return ctx.active && target >= 0 && ctx.trackID == target;
+  }
+
+  inline double ValueOf(const G4double& v) {
+    return static_cast<double>(GET_VALUE(v));
+  }
+
+#ifdef CODI_FORWARD
+  inline double DotOf(const G4double& v) {
+    return static_cast<double>(GET_DOTVALUE(v));
+  }
+#else
+  inline double DotOf(const G4double&) {
+    return 0.0;
+  }
+#endif
+
+  G4double DebugNaN() {
+    return static_cast<G4double>(std::numeric_limits<double>::quiet_NaN());
+  }
+
+  std::ofstream& GeomDebugStream() {
+    static std::ofstream out;
+    static bool initialised = false;
+    if (!initialised) {
+      const char* filePath = ReadEnvStr("HEPEMSHOW_GEOM_DEBUG_FILE", "geom_distance_debug.csv");
+      out.open(filePath, std::ios::out | std::ios::trunc);
+      if (out.good()) {
+        out << "event,trackID,parentID,step,ctxStage,geomStage,reason,volume,layer,abs,"
+            << "rX,rX_dot,rY,rY_dot,rZ,rZ_dot,"
+            << "vX,vX_dot,vY,vY_dot,vZ,vZ_dot,"
+            << "rxCalo,rxCalo_dot,trLayer,trLayer_dot,rxLayer,rxLayer_dot,"
+            << "dToCalo,dToCalo_dot,distOut,distOut_dot\n";
+      }
+      initialised = true;
+    }
+    return out;
+  }
+
+  void LogGeomDistanceStage(const char* geomStage, const char* reason,
+                            const Box* volume, int indxLayer, int indxAbs,
+                            const G4double* r, const G4double* v,
+                            const G4double& rxCalo, const G4double& trLayeri, const G4double& rxLayer,
+                            const G4double& dToCalo, const G4double& distOut) {
+    if (!ShouldLogGeometry()) {
+      return;
+    }
+    std::ofstream& out = GeomDebugStream();
+    if (!out.good()) {
+      return;
+    }
+    const GeometryDebugContext& ctx = GetGeometryDebugContext();
+    const std::string volumeName = volume == nullptr ? "null" : volume->GetName();
+    out
+      << ctx.eventID << ','
+      << ctx.trackID << ','
+      << ctx.parentID << ','
+      << ctx.stepID << ','
+      << ctx.stage << ','
+      << geomStage << ','
+      << reason << ','
+      << volumeName << ','
+      << indxLayer << ','
+      << indxAbs << ','
+      << ValueOf(r[0]) << ',' << DotOf(r[0]) << ','
+      << ValueOf(r[1]) << ',' << DotOf(r[1]) << ','
+      << ValueOf(r[2]) << ',' << DotOf(r[2]) << ','
+      << ValueOf(v[0]) << ',' << DotOf(v[0]) << ','
+      << ValueOf(v[1]) << ',' << DotOf(v[1]) << ','
+      << ValueOf(v[2]) << ',' << DotOf(v[2]) << ','
+      << ValueOf(rxCalo) << ',' << DotOf(rxCalo) << ','
+      << ValueOf(trLayeri) << ',' << DotOf(trLayeri) << ','
+      << ValueOf(rxLayer) << ',' << DotOf(rxLayer) << ','
+      << ValueOf(dToCalo) << ',' << DotOf(dToCalo) << ','
+      << ValueOf(distOut) << ',' << DotOf(distOut)
+      << '\n';
+  }
 }
 
 void Geometry::SetBoundaryTolerance(G4double tol) {
@@ -24,6 +157,20 @@ void Geometry::SetBoundaryTolerance(G4double tol) {
 
 G4double Geometry::GetBoundaryTolerance() {
   return gBoundaryTolerance;
+}
+
+void Geometry::SetDistanceDebugContext(int eventID, int trackID, int parentID, int stepID, const char* stage) {
+  GeometryDebugContext& ctx = GetGeometryDebugContext();
+  ctx.active = true;
+  ctx.eventID = eventID;
+  ctx.trackID = trackID;
+  ctx.parentID = parentID;
+  ctx.stepID = stepID;
+  ctx.stage = stage == nullptr ? "" : stage;
+}
+
+void Geometry::ClearDistanceDebugContext() {
+  GetGeometryDebugContext() = GeometryDebugContext{};
 }
 
 Geometry::Geometry() {
@@ -107,10 +254,12 @@ void Geometry::UpdateParameters() {
 // note: try to keep this more verbose than fast to keep it clear
 G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** currentVolume, int* indxLayer, int* indxAbs) {
   const G4double boundaryTol = gBoundaryTolerance;
+  const G4double dbgNaN      = DebugNaN();
   // init everything to a step in the `world` case
   *currentVolume = fBoxWorld;
   *indxLayer     = -1;
   *indxAbs       = -1;
+  LogGeomDistanceStage("enter_global", "start", *currentVolume, *indxLayer, *indxAbs, r, v, dbgNaN, dbgNaN, dbgNaN, dbgNaN, dbgNaN);
 
   // calculate position in the `calorimeter` system:
   // - only x-coordinate is need as everything is centered along the yz
@@ -118,9 +267,12 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   const G4double rx_Calo = r[0];
   r[0] = r[0] - 0.5 * fCaloThick; //FIX
   const G4double dToCalo = fBoxCalo->DistanceToOut(r, v);
+  LogGeomDistanceStage("after_calo_shift", "computed_dToCalo", fBoxCalo, *indxLayer, *indxAbs, r, v, rx_Calo, dbgNaN, dbgNaN, dToCalo, dbgNaN);
   // check if about leaving the calorimeter volume: distance to out is zero
   if (dToCalo <= boundaryTol) {
     // currentVolume is already set to `world`
+    const G4double distOut = 1.0E+20;
+    LogGeomDistanceStage("return_world", "dToCalo_le_boundaryTol", *currentVolume, *indxLayer, *indxAbs, r, v, rx_Calo, dbgNaN, dbgNaN, dToCalo, distOut);
     return 1.0E+20;
   }
 
@@ -136,7 +288,11 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   // calculate the distance to the `layer` boundary along the given direction
   // why: tolerance and direction was not considered! So to detect here that
   //      the point is actually miss-located (distance is zero in that case.)
-  if (fBoxLayer->DistanceToOut(r, v) <= boundaryTol) {
+  const G4double dToLayer = fBoxLayer->DistanceToOut(r, v);
+  LogGeomDistanceStage("after_layer_map", "computed_dToLayer", fBoxLayer, *indxLayer, *indxAbs, r, v, rx_Calo, trLayeri, rx_Layer, dToCalo, dToLayer);
+  if (dToLayer <= boundaryTol) {
+    const G4double distOut = 0.0;
+    LogGeomDistanceStage("return_layer_boundary", "dToLayer_le_boundaryTol", fBoxLayer, *indxLayer, *indxAbs, r, v, rx_Calo, trLayeri, rx_Layer, dToCalo, distOut);
     return 0.0;
     // NOTE: I could also push here and do recursion but keep it clear and push only in the steppers
   }
@@ -151,7 +307,9 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
     // the given direction (again, I could push here and do recursion whenever it's zero)
     *currentVolume = fBoxAbs;
     *indxAbs       = 0;
-    return fBoxAbs->DistanceToOut(r, v);
+    const G4double distOut = fBoxAbs->DistanceToOut(r, v);
+    LogGeomDistanceStage("return_abs", "inside_absorber", *currentVolume, *indxLayer, *indxAbs, r, v, rx_Calo, trLayeri, rx_Layer, dToCalo, distOut);
+    return distOut;
   } else { // in the `gap`
     // calculate the position in the `gap` system:
     // - the translation vector and transform the point
@@ -161,6 +319,8 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
     // the given direction (again, I could push here and do recursion whenever it's zero)
     *currentVolume = fBoxGap;
     *indxAbs       = 1;
-    return fBoxGap->DistanceToOut(r, v);
+    const G4double distOut = fBoxGap->DistanceToOut(r, v);
+    LogGeomDistanceStage("return_gap", "inside_gap", *currentVolume, *indxLayer, *indxAbs, r, v, rx_Calo, trLayeri, rx_Layer, dToCalo, distOut);
+    return distOut;
   }
 }

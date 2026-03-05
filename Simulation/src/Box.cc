@@ -8,6 +8,44 @@
 #include <sstream>
 #include <cmath>
 
+namespace {
+
+G4double& BoxDistanceDirDenFloor() {
+  static G4double floor = static_cast<G4double>(0.0);
+  return floor;
+}
+
+inline G4double BoxStopGrad(const G4double& x) {
+  return static_cast<G4double>(GET_VALUE(x));
+}
+
+inline G4double BoxSignedFloorFromValue(const G4double& val, const G4double& floor) {
+  if (!(GET_VALUE(floor) > 0.0)) {
+    return val;
+  }
+  const double absVal = std::abs(GET_VALUE(val));
+  if (absVal >= GET_VALUE(floor)) {
+    return val;
+  }
+  return GET_VALUE(val) < 0.0 ? -floor : floor;
+}
+
+inline G4double BoxRegularizedRatioKeepPrimal(const G4double& num, const G4double& den, const G4double& denFloor) {
+  if (!(GET_VALUE(denFloor) > 0.0)) {
+    return num / den;
+  }
+  const G4double numVal = BoxStopGrad(num);
+  const G4double denVal = BoxStopGrad(den);
+  const G4double denReg = BoxSignedFloorFromValue(denVal, denFloor);
+  const G4double primal = BoxStopGrad(num / den);
+  const G4double dfdn = BoxStopGrad(1.0 / denReg);
+  const G4double dfdd = BoxStopGrad(-numVal / (denReg * denReg));
+  const G4double corr = (num - numVal) * dfdn + (den - denVal) * dfdd;
+  return primal + (corr - BoxStopGrad(corr));
+}
+
+}  // namespace
+
 
 Box::Box (const std::string& name, int indxMat, G4double pX, G4double pY, G4double pZ)
 : fName(name),
@@ -58,6 +96,14 @@ G4double Box::GetHalfLength(int idx) const {
   return 0;
 }
 
+void Box::ConfigureDistanceToOutDerivativeRegularization(G4double dirDenFloor) {
+  BoxDistanceDirDenFloor() = GET_VALUE(dirDenFloor) > 0.0 ? dirDenFloor : static_cast<G4double>(0.0);
+}
+
+G4double Box::GetDistanceToOutDerivativeRegularization() {
+  return BoxDistanceDirDenFloor();
+}
+
 
 // p should be in local coordinates
 // returns zero if p is outside of the box or within tolerance
@@ -76,14 +122,18 @@ G4double Box::DistanceToOut(G4double* p, G4double *v) const {
   // Find intersection
   //
   const G4double vx = v[0];
-  const G4double tx = (vx == 0) ? 1.0E+20 : (G4double)((std::copysign(fDx,vx) - p[0])/vx);
+  const G4double dirDenFloor = BoxDistanceDirDenFloor();
+  const G4double txNum = static_cast<G4double>(std::copysign(GET_VALUE(fDx), GET_VALUE(vx))) - p[0];
+  const G4double tx = (GET_VALUE(vx) == 0.0) ? 1.0E+20 : BoxRegularizedRatioKeepPrimal(txNum, vx, dirDenFloor);
   //
   const G4double vy = v[1];
-  const G4double ty = (vy == 0) ? tx : (G4double)((std::copysign(fDy,vy) - p[1])/vy);
+  const G4double tyNum = static_cast<G4double>(std::copysign(GET_VALUE(fDy), GET_VALUE(vy))) - p[1];
+  const G4double ty = (GET_VALUE(vy) == 0.0) ? tx : BoxRegularizedRatioKeepPrimal(tyNum, vy, dirDenFloor);
   const G4double txy = std::min(tx,ty);
   //
   const G4double vz = v[2];
-  const G4double tz = (vz == 0) ? txy : (G4double)((std::copysign(fDz,vz) - p[2])/vz);
+  const G4double tzNum = static_cast<G4double>(std::copysign(GET_VALUE(fDz), GET_VALUE(vz))) - p[2];
+  const G4double tz = (GET_VALUE(vz) == 0.0) ? txy : BoxRegularizedRatioKeepPrimal(tzNum, vz, dirDenFloor);
   const G4double tmax = std::min(txy,tz);
   //
   return tmax;

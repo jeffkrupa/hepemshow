@@ -102,6 +102,18 @@ public:
     */
   G4double GetHalfLength(int idx) const;
 
+  /** Configure derivative-only regularization for direction denominators in DistanceToOut.
+    *
+    * The primal value of DistanceToOut is kept unchanged; only derivative coefficients for
+    * 1/vx, 1/vy and 1/vz are regularized by applying a signed denominator floor.
+    *
+    * @param dirDenFloor floor applied to |v{xyz}| in derivative coefficients; 0 disables.
+    */
+  static void ConfigureDistanceToOutDerivativeRegularization(G4double dirDenFloor);
+
+  /** Returns the currently configured derivative-only denominator floor. */
+  static G4double GetDistanceToOutDerivativeRegularization();
+
 
   /**
     * Calculates distance to the volume boundary from inside along the given

@@ -145,6 +145,9 @@ public:
   /** Configure if MSC displacement should be applied and the optional post-safety floor [mm]. */
   static void ConfigureMscDisplacement(bool enable, G4double postSafetyFloor);
 
+  /** Configure whether boundary-limited backward (vx<0) steps are treated as unsafe for stop-grad logic. */
+  static void ConfigureBackwardBoundaryStop(bool enable);
+
   /** Configure boundary ping-pong mitigation based on repeated hits of the same x-boundary plane over a track history. */
   static void ConfigureSameBoundaryStop(int repeatThreshold, G4double positionTolerance, int minFlips, bool fullTrackStop, int hardStopThreshold);
 

@@ -31,6 +31,7 @@ struct InputParameters {
     fThreshold(0.1),
     fThreshold2(-1.),
     fGrazingStopsTrack(true),
+    fBackwardBoundaryStop(false),
     fGradientStopMode(2),
     fEnableKECut(false),
     fKECut(0.5),
@@ -42,7 +43,17 @@ struct InputParameters {
     fSameBoundaryPosTolerance(1.0E-6),
     fSameBoundaryMinFlips(1),
     fSameBoundaryFullTrackStop(false),
-    fSameBoundaryHardStop(0) {}  //FIX
+    fSameBoundaryHardStop(0),
+    fNumIALeftMfpFloor(0.0),
+    fGammaNumIALeftMfpFloor(0.0),
+    fGammaPhotoelectricEkinFloor(0.0),
+    fBoxDirDenFloor(0.0),
+    fRotateUpDerivativeFloor(0.0),
+    fConversionDerivativeEpsilon(0.0),
+    fUmscCosThetaDenFloor(0.0),
+    fUmscTauBlendEpsilon(0.0),
+    fUmscSimpleDenFloor(0.0),
+    fUmscDispRadFloor(0.0) {}
 
 
   /** The geometry related input arguments.*/
@@ -86,6 +97,7 @@ struct InputParameters {
   G4double fThreshold;        // FIX
   G4double fThreshold2;       // FIX
   bool fGrazingStopsTrack; ///< when true, unsafe grazing steps disable gradients for the rest of the track
+  bool fBackwardBoundaryStop; ///< when true, boundary-limited backward (vx<0) steps are treated as unsafe for stop-grad logic
   int fGradientStopMode;   ///< 0: keep gradients, 1: stop on current track, 2: stop on track and descendants
   bool fEnableKECut;       ///< apply kinetic-energy cut when true
   G4double fKECut;         ///< threshold value for kinetic-energy cut in [MeV]
@@ -98,6 +110,16 @@ struct InputParameters {
   int fSameBoundaryMinFlips;        ///< minimum number of vx sign flips observed on the same boundary over track history
   bool fSameBoundaryFullTrackStop;  ///< if true, same-boundary trigger disables full track instead of step-local sanitize
   int fSameBoundaryHardStop;        ///< hard full-track stop threshold on total hits of the same boundary (0 disables)
+  G4double fNumIALeftMfpFloor;      ///< derivative-only mfp floor [mm] in UpdateNumIALeft (0 disables)
+  G4double fGammaNumIALeftMfpFloor; ///< derivative-only mfp floor [mm] in Gamma UpdateNumIALeft (0 disables)
+  G4double fGammaPhotoelectricEkinFloor; ///< derivative-only ekin floor [MeV] for 1/ekin in gamma photoelectric xsec (0 disables)
+  G4double fBoxDirDenFloor;         ///< derivative-only signed floor for Box::DistanceToOut direction denominators vx/vy/vz
+  G4double fRotateUpDerivativeFloor; ///< derivative-only floor for RotateToReferenceFrame denominator sqrt(refDir_x^2+refDir_y^2)
+  G4double fConversionDerivativeEpsilon; ///< derivative-only epsilon for near-singular MSC true/geom conversion formulas
+  G4double fUmscCosThetaDenFloor;   ///< derivative-only denominator floor in UMSC SampleCosineTheta ratio chain
+  G4double fUmscTauBlendEpsilon;    ///< derivative-only smoothing width around UMSC tau branch threshold
+  G4double fUmscSimpleDenFloor;     ///< derivative-only denominator floor in UMSC SimpleScattering
+  G4double fUmscDispRadFloor;       ///< derivative-only floor for UMSC displacement sqrt radicand derivative
   #ifdef CODI_REVERSE
     std::vector<double> barEdep;     ///< Bar values of the energy depositions
   #endif
@@ -125,6 +147,7 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - threshold            : "     << theParam.fThreshold        << " (|vx| grazing threshold)" << std::endl;
   std::cout << "         - threshold2           : "     << theParam.fThreshold2       << " (near-boundary safety [mm], <=0 uses default)" << std::endl;
   std::cout << "         - grazing-stop-track   : "     << (theParam.fGrazingStopsTrack ? 1 : 0) << std::endl;
+  std::cout << "         - backward-boundary-stop: "    << (theParam.fBackwardBoundaryStop ? 1 : 0) << std::endl;
   std::cout << "         - stop-grad-mode       : "     << theParam.fGradientStopMode << std::endl;
   std::cout << "         - msc-displacement     : "     << (theParam.fEnableMscDisplacement ? 1 : 0) << std::endl;
   std::cout << "         - msc-step-random      : "     << (theParam.fEnableMscStepRandomization ? 1 : 0) << std::endl;
@@ -135,6 +158,16 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - same-boundary-min-flips: "   << theParam.fSameBoundaryMinFlips << std::endl;
   std::cout << "         - same-boundary-full-track: "  << (theParam.fSameBoundaryFullTrackStop ? 1 : 0) << std::endl;
   std::cout << "         - same-boundary-hard-stop: "   << theParam.fSameBoundaryHardStop << " (0=off)" << std::endl;
+  std::cout << "         - numia-mfp-floor      : "     << theParam.fNumIALeftMfpFloor << " [mm] (derivative-only floor, 0=off)" << std::endl;
+  std::cout << "         - gamma-numia-mfp-floor: "     << theParam.fGammaNumIALeftMfpFloor << " [mm] (derivative-only floor, 0=off)" << std::endl;
+  std::cout << "         - gamma-pe-ekin-floor  : "     << theParam.fGammaPhotoelectricEkinFloor << " [MeV] (derivative-only floor, 0=off)" << std::endl;
+  std::cout << "         - box-dir-den-floor    : "     << theParam.fBoxDirDenFloor << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - rotate-up-floor      : "     << theParam.fRotateUpDerivativeFloor << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - conversion-reg-eps   : "     << theParam.fConversionDerivativeEpsilon << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - umsc-cos-den-floor   : "     << theParam.fUmscCosThetaDenFloor << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - umsc-tau-blend-eps   : "     << theParam.fUmscTauBlendEpsilon << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - umsc-simple-den-floor: "     << theParam.fUmscSimpleDenFloor << " (derivative-only, 0=off)" << std::endl;
+  std::cout << "         - umsc-disp-rad-floor  : "     << theParam.fUmscDispRadFloor << " (derivative-only, 0=off)" << std::endl;
   std::cout << "         - ke-cut-threshold    : ";
   if (theParam.fEnableKECut) {
     std::cout << theParam.fKECut << " [MeV]" << std::endl;
@@ -166,6 +199,7 @@ static struct option options[] = {
   {"threshold             (|vx| threshold for grazing condition) - default: 0.1"              , required_argument, 0, 'f'},
   {"threshold2            (near-boundary safety threshold [mm], <=0 uses internal default) - default:-1.0", required_argument, 0, 'k'},
   {"grazing-stop-track    (1: disable gradient for full track, 0: current-step sanitize only) - default: 1", required_argument, 0, 'y'},
+  {"backward-boundary-stop (1: treat boundary-limited backward vx<0 as unsafe, 0: disable this trigger) - default: 0", required_argument, 0, 'B'},
   {"msc-displacement      (1: enable MSC lateral displacement, 0: disable) - default: 1"    , required_argument, 0, 'm'},
   {"msc-step-random       (1: enable UMSC step-limit randomization, 0: deterministic) - default: 1", required_argument, 0, 'r'},
   {"boundary-tolerance    (distance-to-boundary tolerance in [mm]) - default: 0.0"           , required_argument, 0, 'u'},
@@ -176,6 +210,16 @@ static struct option options[] = {
   {"same-boundary-full-track (1: full-track stopgrad on same-boundary trigger, 0: step-local sanitize) - default: 0", required_argument, 0, 'o'},
   {"same-boundary-hard-stop (full-track stopgrad when total hits on same boundary reach this count; 0 disables) - default: 0", required_argument, 0, 'i'},
   {"ke-cut-threshold      (set kinetic energy cut in [MeV], disabled when absent)"            , required_argument, 0, 'c'},
+  {"numia-mfp-floor       (derivative-only mfp floor [mm] for UpdateNumIALeft, 0 disables) - default: 0.0", required_argument, 0, 'A'},
+  {"gamma-numia-mfp-floor (derivative-only mfp floor [mm] for Gamma UpdateNumIALeft, 0 disables) - default: 0.0", required_argument, 0, 'T'},
+  {"gamma-pe-ekin-floor   (derivative-only ekin floor [MeV] for 1/ekin in gamma photoelectric xsec, 0 disables) - default: 0.0", required_argument, 0, 'U'},
+  {"box-dir-den-floor     (derivative-only signed floor for Box::DistanceToOut direction denominators vx/vy/vz, 0 disables) - default: 0.0", required_argument, 0, 'V'},
+  {"rotate-up-floor       (derivative-only floor for RotateToReferenceFrame denominator, 0 disables) - default: 0.0", required_argument, 0, 'F'},
+  {"conversion-reg-eps    (derivative-only epsilon for MSC true/geom conversion regularization, 0 disables) - default: 0.0", required_argument, 0, 'N'},
+  {"umsc-cos-den-floor    (derivative-only denominator floor in UMSC SampleCosineTheta ratios, 0 disables) - default: 0.0", required_argument, 0, 'P'},
+  {"umsc-tau-blend-eps    (derivative-only smoothing width around UMSC tau branch threshold, 0 disables) - default: 0.0", required_argument, 0, 'Q'},
+  {"umsc-simple-den-floor (derivative-only denominator floor in UMSC SimpleScattering, 0 disables) - default: 0.0", required_argument, 0, 'R'},
+  {"umsc-disp-rad-floor   (derivative-only floor for UMSC displacement sqrt radicand derivative, 0 disables) - default: 0.0", required_argument, 0, 'S'},
   {"stop-grad-mode (0:none,1:track,2:track+desc) - default: 2"         , required_argument, 0, 'x'},
   {"help"                                                                                    , no_argument      , 0, 'h'},
   {0, 0, 0, 0}
@@ -229,7 +273,7 @@ static inline G4double parseRealInput(const char* arg){
 void GetOpt(int argc, char *argv[], InputParameters& param) {
   while (true) {
     int c, optidx = 0;
-    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:m:r:u:w:q:z:j:o:i:c:x:", options, &optidx);
+    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:B:m:r:u:w:q:z:j:o:i:c:A:T:U:V:F:N:P:Q:R:S:x:", options, &optidx);
     if (c == -1)
       break;
     switch (c) {
@@ -308,6 +352,16 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
          exit(-1);
        }
        param.fGrazingStopsTrack = (flag == 1);
+       break;
+    }
+    case 'B': {
+       const int flag = std::stoi(optarg);
+       if (flag != 0 && flag != 1) {
+         std::cerr << "backward-boundary-stop must be 0 or 1: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fBackwardBoundaryStop = (flag == 1);
        break;
     }
     case 'm': {
@@ -409,6 +463,106 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
        }
        param.fEnableKECut = true;
        param.fKECut = value;
+       break;
+    }
+    case 'A': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "numia-mfp-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fNumIALeftMfpFloor = value;
+       break;
+    }
+    case 'T': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "gamma-numia-mfp-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fGammaNumIALeftMfpFloor = value;
+       break;
+    }
+    case 'U': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "gamma-pe-ekin-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fGammaPhotoelectricEkinFloor = value;
+       break;
+    }
+    case 'V': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "box-dir-den-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fBoxDirDenFloor = value;
+       break;
+    }
+    case 'F': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "rotate-up-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fRotateUpDerivativeFloor = value;
+       break;
+    }
+    case 'N': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "conversion-reg-eps must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fConversionDerivativeEpsilon = value;
+       break;
+    }
+    case 'P': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "umsc-cos-den-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fUmscCosThetaDenFloor = value;
+       break;
+    }
+    case 'Q': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "umsc-tau-blend-eps must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fUmscTauBlendEpsilon = value;
+       break;
+    }
+    case 'R': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "umsc-simple-den-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fUmscSimpleDenFloor = value;
+       break;
+    }
+    case 'S': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "umsc-disp-rad-floor must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fUmscDispRadFloor = value;
        break;
     }
 
