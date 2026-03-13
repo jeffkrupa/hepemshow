@@ -123,16 +123,16 @@ G4double Box::DistanceToOut(G4double* p, G4double *v) const {
   //
   const G4double vx = v[0];
   const G4double dirDenFloor = BoxDistanceDirDenFloor();
-  const G4double txNum = static_cast<G4double>(std::copysign(GET_VALUE(fDx), GET_VALUE(vx))) - p[0];
+  const G4double txNum = std::copysign(fDx, vx) - p[0];
   const G4double tx = (GET_VALUE(vx) == 0.0) ? 1.0E+20 : BoxRegularizedRatioKeepPrimal(txNum, vx, dirDenFloor);
   //
   const G4double vy = v[1];
-  const G4double tyNum = static_cast<G4double>(std::copysign(GET_VALUE(fDy), GET_VALUE(vy))) - p[1];
+  const G4double tyNum = std::copysign(fDy, vy) - p[1];
   const G4double ty = (GET_VALUE(vy) == 0.0) ? tx : BoxRegularizedRatioKeepPrimal(tyNum, vy, dirDenFloor);
   const G4double txy = std::min(tx,ty);
   //
   const G4double vz = v[2];
-  const G4double tzNum = static_cast<G4double>(std::copysign(GET_VALUE(fDz), GET_VALUE(vz))) - p[2];
+  const G4double tzNum = std::copysign(fDz, vz) - p[2];
   const G4double tz = (GET_VALUE(vz) == 0.0) ? txy : BoxRegularizedRatioKeepPrimal(tzNum, vz, dirDenFloor);
   const G4double tmax = std::min(txy,tz);
   //

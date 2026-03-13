@@ -42,7 +42,7 @@ namespace {
   bool gEnableKECut = false;
 }
 
-bool outputall = true;
+bool outputall = false;
 bool outputboundarylayers = false;
 bool outputpingpongtracks = false;
 bool outputvx = false;
@@ -1146,14 +1146,14 @@ void SteppingLoop::ElectronStepper(G4HepEmTLData& theTLData, G4HepEmState& theSt
     const bool isBackward = stepVx < 0.0;
     const bool isGrazing = AbsValue(stepVx) < vxThreshold;
     const bool isUnsafeBackward = gEnableBackwardBoundaryStop && isBackward && onBoundary;
-
+    
     const bool isUnsafeGrazing = (onBoundary || (preStepSafety < nearBoundarySafety)) && isGrazing;
     const bool reachedRepeatThreshold = onBoundary && (gSameBoundaryStopThreshold > 0) && (sameBoundaryHits >= gSameBoundaryStopThreshold);
     const bool reachedFlipThreshold = (gSameBoundaryMinFlips <= 0) || (sameBoundaryFlips >= gSameBoundaryMinFlips);
     const bool isUnsafeRepeatBoundary = reachedRepeatThreshold && reachedFlipThreshold;
     const bool isUnsafeStep = isUnsafeBackward || isUnsafeGrazing || isUnsafeRepeatBoundary;
     if (isUnsafeStep) {
-            const bool fullTrackDueToBackward = isUnsafeBackward;
+      const bool fullTrackDueToBackward = isUnsafeBackward;
       const bool fullTrackDueToGrazing = isUnsafeGrazing && gGrazingStopsFullTrack;
       const bool fullTrackDueToRepeat = isUnsafeRepeatBoundary &&
         (gSameBoundaryFullTrackStop ||
