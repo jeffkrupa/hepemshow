@@ -162,6 +162,7 @@ int main(int argc, char* argv[]) {
       theInputParameters.fSameBoundaryHardStop);
   G4HepEmElectronManager::ConfigureNumIALeftDerivativeRegularization(theInputParameters.fNumIALeftMfpFloor);
   G4HepEmGammaManager::ConfigureNumIALeftDerivativeRegularization(theInputParameters.fGammaNumIALeftMfpFloor);
+  G4HepEmGammaManager::ConfigureMfpCapRegularization(theInputParameters.fGammaMfpCap);
   G4HepEmGammaManager::ConfigurePhotoelectricDerivativeRegularization(theInputParameters.fGammaPhotoelectricEkinFloor);
   ConfigureRotateUpDerivativeFloor(theInputParameters.fRotateUpDerivativeFloor);
   G4HepEmElectronManager::ConfigureConversionDerivativeRegularization(theInputParameters.fConversionDerivativeEpsilon);

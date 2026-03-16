@@ -46,6 +46,7 @@ struct InputParameters {
     fSameBoundaryHardStop(0),
     fNumIALeftMfpFloor(0.0),
     fGammaNumIALeftMfpFloor(0.0),
+    fGammaMfpCap(0.0),
     fGammaPhotoelectricEkinFloor(0.0),
     fBoxDirDenFloor(0.0),
     fRotateUpDerivativeFloor(0.0),
@@ -112,6 +113,7 @@ struct InputParameters {
   int fSameBoundaryHardStop;        ///< hard full-track stop threshold on total hits of the same boundary (0 disables)
   G4double fNumIALeftMfpFloor;      ///< derivative-only mfp floor [mm] in UpdateNumIALeft (0 disables)
   G4double fGammaNumIALeftMfpFloor; ///< derivative-only mfp floor [mm] in Gamma UpdateNumIALeft (0 disables)
+  G4double fGammaMfpCap;            ///< derivative-only mfp cap [mm] in Gamma HowFar step-limit product (0 disables)
   G4double fGammaPhotoelectricEkinFloor; ///< derivative-only ekin floor [MeV] for 1/ekin in gamma photoelectric xsec (0 disables)
   G4double fBoxDirDenFloor;         ///< derivative-only signed floor for Box::DistanceToOut direction denominators vx/vy/vz
   G4double fRotateUpDerivativeFloor; ///< derivative-only floor for RotateToReferenceFrame denominator sqrt(refDir_x^2+refDir_y^2)
@@ -160,6 +162,7 @@ void PrintParameters (const struct InputParameters& theParam) {
   std::cout << "         - same-boundary-hard-stop: "   << theParam.fSameBoundaryHardStop << " (0=off)" << std::endl;
   std::cout << "         - numia-mfp-floor      : "     << theParam.fNumIALeftMfpFloor << " [mm] (derivative-only floor, 0=off)" << std::endl;
   std::cout << "         - gamma-numia-mfp-floor: "     << theParam.fGammaNumIALeftMfpFloor << " [mm] (derivative-only floor, 0=off)" << std::endl;
+  std::cout << "         - gamma-mfp-cap        : "     << theParam.fGammaMfpCap << " [mm] (derivative-only cap, 0=off)" << std::endl;
   std::cout << "         - gamma-pe-ekin-floor  : "     << theParam.fGammaPhotoelectricEkinFloor << " [MeV] (derivative-only floor, 0=off)" << std::endl;
   std::cout << "         - box-dir-den-floor    : "     << theParam.fBoxDirDenFloor << " (derivative-only, 0=off)" << std::endl;
   std::cout << "         - rotate-up-floor      : "     << theParam.fRotateUpDerivativeFloor << " (derivative-only, 0=off)" << std::endl;
@@ -212,6 +215,7 @@ static struct option options[] = {
   {"ke-cut-threshold      (set kinetic energy cut in [MeV], disabled when absent)"            , required_argument, 0, 'c'},
   {"numia-mfp-floor       (derivative-only mfp floor [mm] for UpdateNumIALeft, 0 disables) - default: 0.0", required_argument, 0, 'A'},
   {"gamma-numia-mfp-floor (derivative-only mfp floor [mm] for Gamma UpdateNumIALeft, 0 disables) - default: 0.0", required_argument, 0, 'T'},
+  {"gamma-mfp-cap         (derivative-only mfp cap [mm] for Gamma HowFar step-limit product, 0 disables) - default: 0.0", required_argument, 0, 'C'},
   {"gamma-pe-ekin-floor   (derivative-only ekin floor [MeV] for 1/ekin in gamma photoelectric xsec, 0 disables) - default: 0.0", required_argument, 0, 'U'},
   {"box-dir-den-floor     (derivative-only signed floor for Box::DistanceToOut direction denominators vx/vy/vz, 0 disables) - default: 0.0", required_argument, 0, 'V'},
   {"rotate-up-floor       (derivative-only floor for RotateToReferenceFrame denominator, 0 disables) - default: 0.0", required_argument, 0, 'F'},
@@ -273,7 +277,7 @@ static inline G4double parseRealInput(const char* arg){
 void GetOpt(int argc, char *argv[], InputParameters& param) {
   while (true) {
     int c, optidx = 0;
-    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:B:m:r:u:w:q:z:j:o:i:c:A:T:U:V:F:N:P:Q:R:S:x:", options, &optidx);
+    c = getopt_long(argc, argv, "hl:a:g:t:p:e:n:s:d:v:b:f:k:y:B:m:r:u:w:q:z:j:o:i:c:A:T:C:U:V:F:N:P:Q:R:S:x:", options, &optidx);
     if (c == -1)
       break;
     switch (c) {
@@ -483,6 +487,16 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
          exit(-1);
        }
        param.fGammaNumIALeftMfpFloor = value;
+       break;
+    }
+    case 'C': {
+       G4double value = parseRealInput(optarg);
+       if (value < 0.0) {
+         std::cerr << "gamma-mfp-cap must be non-negative: " << optarg << std::endl;
+         Help();
+         exit(-1);
+       }
+       param.fGammaMfpCap = value;
        break;
     }
     case 'U': {

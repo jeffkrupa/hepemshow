@@ -52,7 +52,7 @@ void EventLoop::ProcessEvents(G4HepEmTLData& theTLData, G4HepEmState& theState, 
   const bool replay_one = false;
   const bool save_one = false;
   //const int  target_event = 18363;
-  const int  target_event = 539;
+  const int  target_event = 5002;
  
   if (replay_one){
     eventID = target_event;
@@ -241,6 +241,20 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
        theResult.fEdepPerLayer_AccD[i].add(GET_DOTVALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
     #endif
   }
+
+  // --- Per-event outlier detector ---
+  #if CODI_FORWARD
+  {
+    double maxAbsDot = 0;
+    for(int i=0; i<50; i++){
+      double d = std::abs(GET_DOTVALUE(theResult.fEdepPerLayer_CurrentEvent.GetY()[i]));
+      if(d > maxAbsDot) maxAbsDot = d;
+    }
+    if(maxAbsDot > 1e8) {
+      std::cerr << "OUTLIER_EVENT " << eventID << " maxAbsDot=" << maxAbsDot << std::endl;
+    }
+  }
+  #endif
 
   dum = theResult.fPerEventRes.fEdepGap;
   theResult.fEdepGap  += dum;
