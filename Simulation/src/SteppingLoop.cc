@@ -42,7 +42,7 @@ namespace {
   bool gEnableKECut = false;
 }
 
-bool outputall = false;
+bool outputall = (std::getenv("HEPEMSHOW_OUTPUT_ALL") && std::string(std::getenv("HEPEMSHOW_OUTPUT_ALL")) != "0");
 bool outputboundarylayers = false;
 bool outputpingpongtracks = false;
 bool outputvx = false;
