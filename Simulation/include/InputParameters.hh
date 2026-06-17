@@ -68,10 +68,18 @@ struct InputParameters {
       fSizeTransverse(400.0) {}
 
     int    fNumLayers;         ///< number of layers in the calorimeter
-    G4double fThicknessAbsorber; ///< absorber thickness along X in [mm]
-    G4double fThicknessGap;      ///< gap thickness along X in [mm]
+    G4double fThicknessAbsorber; ///< absorber thickness along X in [mm] (uniform initializer)
+    G4double fThicknessGap;      ///< gap thickness along X in [mm] (uniform initializer)
     G4double fThicknessCalo;     ///< calorimeter thickness along X [mm] ONLY if number of layers is zero
     G4double fSizeTransverse;    ///< calorimeter full size along YZ in [mm]
+
+    // Optional per-layer overrides (applied after the uniform initializers above).
+    std::vector<G4double> fAbsProfile; ///< full per-layer absorber profile (length must equal fNumLayers); empty = unused
+    std::vector<G4double> fGapProfile; ///< full per-layer gap profile (length must equal fNumLayers); empty = unused
+    int    fAbsLayerIdx = -1;  ///< single-layer absorber override index (-1 = none)
+    G4double fAbsLayerVal = 0;   ///< single-layer absorber override value [mm] (may carry a forward dot)
+    int    fGapLayerIdx = -1;  ///< single-layer gap override index (-1 = none)
+    G4double fGapLayerVal = 0;   ///< single-layer gap override value [mm] (may carry a forward dot)
   };
 
 
@@ -225,6 +233,10 @@ static struct option options[] = {
   {"umsc-simple-den-floor (derivative-only denominator floor in UMSC SimpleScattering, 0 disables) - default: 0.0", required_argument, 0, 'R'},
   {"umsc-disp-rad-floor   (derivative-only floor for UMSC displacement sqrt radicand derivative, 0 disables) - default: 0.0", required_argument, 0, 'S'},
   {"stop-grad-mode (0:none,1:track,2:track+desc) - default: 2"         , required_argument, 0, 'x'},
+  {"abs-profile          (per-layer absorber thicknesses v0:v1:...:v{N-1} in [mm]; length must equal #layers)", required_argument, 0, 1001},
+  {"gap-profile          (per-layer gap thicknesses v0:v1:...:v{N-1} in [mm]; length must equal #layers)"     , required_argument, 0, 1002},
+  {"abs-layer            (override one layer's absorber thickness: i:value[:dot])"                            , required_argument, 0, 1003},
+  {"gap-layer            (override one layer's gap thickness: i:value[:dot])"                                 , required_argument, 0, 1004},
   {"help"                                                                                    , no_argument      , 0, 'h'},
   {0, 0, 0, 0}
 };
@@ -297,6 +309,39 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
     case 't':
        param.fGeometry.fSizeTransverse = std::stod(optarg);
        break;
+
+    case 1001: { // --abs-profile v0:v1:...:v{N-1}
+       std::vector<double> p = stod_array(optarg);
+       param.fGeometry.fAbsProfile.assign(p.begin(), p.end());
+       break;
+    }
+    case 1002: { // --gap-profile v0:v1:...:v{N-1}
+       std::vector<double> p = stod_array(optarg);
+       param.fGeometry.fGapProfile.assign(p.begin(), p.end());
+       break;
+    }
+    case 1003: { // --abs-layer i:value[:dot]
+       std::vector<double> p = stod_array(optarg);
+       if (p.size() < 2) { std::cerr << "--abs-layer expects i:value[:dot]" << std::endl; Help(); exit(-1); }
+       param.fGeometry.fAbsLayerIdx = (int)p[0];
+       G4double val = p[1];
+       #ifdef CODI_FORWARD
+          if (p.size() >= 3) SET_DOTVALUE(val, p[2]);
+       #endif
+       param.fGeometry.fAbsLayerVal = val;
+       break;
+    }
+    case 1004: { // --gap-layer i:value[:dot]
+       std::vector<double> p = stod_array(optarg);
+       if (p.size() < 2) { std::cerr << "--gap-layer expects i:value[:dot]" << std::endl; Help(); exit(-1); }
+       param.fGeometry.fGapLayerIdx = (int)p[0];
+       G4double val = p[1];
+       #ifdef CODI_FORWARD
+          if (p.size() >= 3) SET_DOTVALUE(val, p[2]);
+       #endif
+       param.fGeometry.fGapLayerVal = val;
+       break;
+    }
 
     case 'x': {
        const int mode = std::stoi(optarg);

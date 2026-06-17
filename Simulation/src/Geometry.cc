@@ -176,8 +176,8 @@ void Geometry::ClearDistanceDebugContext() {
 Geometry::Geometry() {
   // default values: 50 layers of 2.3 [mm] absorber (PbWO4) and 5.7 [mm] gap (lAr)
   fNumLayers  =  50;
-  fAbsThick   = 2.3; // defult value [mm]
-  fGapThick   = 5.7; // defult value [mm]
+  fAbsThick.assign(fNumLayers, G4double(2.3)); // defult value [mm], per layer
+  fGapThick.assign(fNumLayers, G4double(5.7)); // defult value [mm], per layer
   fCaloSizeYZ = 400; // defult value [mm]
 
   // these will be computed automatically in the `UpdateParameters`
@@ -208,10 +208,16 @@ Geometry::~Geometry() {
 
 
 void Geometry::UpdateParameters() {
-  // calculate the layer and calorimeter thicknesses based on the `absorber`,
-  // `gap` thinkesses and the number of layers
-  fLayerThick = fAbsThick + fGapThick;
-  fCaloThick  = fNumLayers*fLayerThick;
+  // calculate the cumulative layer-start positions (prefix sums of the per-layer
+  // thicknesses) and the total calorimeter thickness. These are kept AD-active so
+  // that an upstream layer's thickness shifts all downstream layer positions.
+  const int N = fNumLayers;
+  fLayerStartX.assign(N+1, G4double(0.0));
+  for (int i = 0; i < N; ++i) {
+    const G4double layerThick = fAbsThick[i] + fGapThick[i];
+    fLayerStartX[i+1] = fLayerStartX[i] + layerThick;
+  }
+  fCaloThick = fLayerStartX[N];
 
   // set/calculate the left hand side x point where the calorimeter starts
   //fCaloStartX = -0.5*fCaloThick;
@@ -230,22 +236,20 @@ void Geometry::UpdateParameters() {
   fBoxWorld->SetHalfLength(1.1*halfCaloYZ, 1);
   fBoxWorld->SetHalfLength(1.1*halfCaloYZ, 2);
 
-  int iMatCalo = 0;
-  fBoxCalo->SetMaterialIndx(iMatCalo);
+  fBoxCalo->SetMaterialIndx(0);
   fBoxCalo->SetHalfLength(0.5*fCaloThick, 0);
   fBoxCalo->SetHalfLength(halfCaloYZ, 1);
   fBoxCalo->SetHalfLength(halfCaloYZ, 2);
 
-
-  fBoxLayer->SetHalfLength(0.5*fLayerThick, 0);
+  // NOTE: the per-layer x half-lengths of the `layer`, `absorber` and `gap` boxes
+  // now vary by layer, so they are set at point-of-use in `CalculateDistanceToOut`.
+  // Here we only fix the transverse (yz) extents that are common to all layers.
   fBoxLayer->SetHalfLength(halfCaloYZ, 1);
   fBoxLayer->SetHalfLength(halfCaloYZ, 2);
 
-  fBoxAbs->SetHalfLength(0.5*fAbsThick, 0);
   fBoxAbs->SetHalfLength(halfCaloYZ, 1);
   fBoxAbs->SetHalfLength(halfCaloYZ, 2);
 
-  fBoxGap->SetHalfLength(0.5*fGapThick, 0);
   fBoxGap->SetHalfLength(halfCaloYZ, 1);
   fBoxGap->SetHalfLength(halfCaloYZ, 2);
 }
@@ -277,13 +281,34 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   }
 
   // calculate the position in the `layer` system:
-  // - first calculate the index of the `layer` in which the point is located
-  const int iLayer = int( GET_VALUE(((rx_Calo)/fLayerThick)) );  //FIX +0.5*fCaloThick
+  // - first locate the `layer` by scanning the cumulative boundaries. This is a
+  //   discrete selection done on the VALUES only (via GET_VALUE), so the layer
+  //   index itself carries no AD information (pre-existing stop-gradient semantics).
+  const double rxCaloV = GET_VALUE(rx_Calo);
+  int iLayer = 0;
+  if (rxCaloV >= GET_VALUE(fLayerStartX[fNumLayers])) {
+    iLayer = fNumLayers - 1;
+  } else if (rxCaloV > GET_VALUE(fLayerStartX[0])) {
+    for (int i = 0; i < fNumLayers; ++i) {
+      if (rxCaloV >= GET_VALUE(fLayerStartX[i]) && rxCaloV < GET_VALUE(fLayerStartX[i+1])) {
+        iLayer = i;
+        break;
+      }
+    }
+  }
   *indxLayer = iLayer;
-  // - then the corresponding translation vector and transform the point
-  const G4double trLayeri = (iLayer)*fLayerThick; //FIX -0.5*fCaloThick +  +0.5
-  const G4double rx_Layer = rx_Calo - trLayeri;
-  r[0] = rx_Layer - 0.5*fLayerThick; //FIX
+  // - then the corresponding (AD-active) translation vector and transform the point.
+  //   trLayeri = cumulative thickness of all preceding layers; rx_Layer is the
+  //   x-position measured from the start of the current layer.
+  const G4double trLayeri  = fLayerStartX[iLayer];
+  const G4double layerThick = fAbsThick[iLayer] + fGapThick[iLayer];
+  const G4double rx_Layer  = rx_Calo - trLayeri;
+  // - set the current layer's box x half-lengths (AD-active) so the per-layer
+  //   thicknesses propagate gradients through the distance calculations below.
+  fBoxLayer->SetHalfLength(0.5*layerThick, 0);
+  fBoxAbs->SetHalfLength(0.5*fAbsThick[iLayer], 0);
+  fBoxGap->SetHalfLength(0.5*fGapThick[iLayer], 0);
+  r[0] = rx_Layer - 0.5*layerThick; //FIX
 
   // calculate the distance to the `layer` boundary along the given direction
   // why: tolerance and direction was not considered! So to detect here that
@@ -298,10 +323,10 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   }
 
   // calculate if the point is in the `absorber` or the `gap` part of the `layer`
-  if (rx_Layer < fAbsThick || fGapThick == 0) { // in the `absorber`
+  if (rx_Layer < fAbsThick[iLayer] || fGapThick[iLayer] == 0) { // in the `absorber`
     // calculate the position in the `absorber` system:
     // - the translation vector and transform the point
-    const G4double trAbs = 0.5 * fAbsThick;  //FIX -0.5*(fLayerThick - fAbsThick)
+    const G4double trAbs = 0.5 * fAbsThick[iLayer];  //FIX -0.5*(fLayerThick - fAbsThick)
     r[0] = rx_Layer - trAbs;
     // set what is left and calculate the distance to the `absorber` boundary along
     // the given direction (again, I could push here and do recursion whenever it's zero)
@@ -313,7 +338,7 @@ G4double Geometry::CalculateDistanceToOut(G4double* r, G4double *v, Box** curren
   } else { // in the `gap`
     // calculate the position in the `gap` system:
     // - the translation vector and transform the point
-    const G4double  trGap = fAbsThick + 0.5 * fGapThick; //FIX -0.5*(fLayerThick -fGapThick) + 
+    const G4double  trGap = fAbsThick[iLayer] + 0.5 * fGapThick[iLayer]; //FIX -0.5*(fLayerThick -fGapThick) +
     r[0] = rx_Layer - trGap;
     // set what is left and calculate the distance to the `gap` boundary along
     // the given direction (again, I could push here and do recursion whenever it's zero)

@@ -201,12 +201,22 @@ void EventLoop::BeginOfEventAction(Results& theResult, int eventID, const G4HepE
   #ifdef CODI_REVERSE
     G4double::getTape().reset();
     G4double::getTape().setActive();
-    theResult.pThicknessAbsorber = theGeometry.GetAbsThick();
-    G4double::getTape().registerInput(theResult.pThicknessAbsorber);
-    theGeometry.SetAbsThick(theResult.pThicknessAbsorber);
-    theResult.pThicknessGap = theGeometry.GetGapThick();
-    G4double::getTape().registerInput(theResult.pThicknessGap);
-    theGeometry.SetGapThick(theResult.pThicknessGap);
+    // register every per-layer absorber/gap thickness as an independent AD input,
+    // then write the registered copies back into the geometry so the simulation
+    // transports gradients w.r.t. each layer's thickness.
+    const int nLayersR = theGeometry.GetNumLayers();
+    theResult.pAbsThick.resize(nLayersR);
+    theResult.pGapThick.resize(nLayersR);
+    for (int i = 0; i < nLayersR; ++i) {
+      theResult.pAbsThick[i] = theGeometry.GetAbsThickLayer(i);
+      G4double::getTape().registerInput(theResult.pAbsThick[i]);
+    }
+    for (int i = 0; i < nLayersR; ++i) {
+      theResult.pGapThick[i] = theGeometry.GetGapThickLayer(i);
+      G4double::getTape().registerInput(theResult.pGapThick[i]);
+    }
+    theGeometry.SetAbsProfile(theResult.pAbsThick);
+    theGeometry.SetGapProfile(theResult.pGapThick);
     theResult.pParticleEnergy = thePrimaryGenerator.GetKinEnergy();
     G4double::getTape().registerInput(theResult.pParticleEnergy);
     thePrimaryGenerator.SetKinEnergy(theResult.pParticleEnergy);
@@ -222,7 +232,8 @@ void EventLoop::BeginOfEventAction(Results& theResult, int eventID, const G4HepE
   theResult.fPerEventRes.fNumStepsGamma  = 0.0;
   theResult.fPerEventRes.fNumStepsElPos  = 0.0;
 
-  for(int i=0; i<50; i++){
+  const int nbReset = theResult.fEdepPerLayer_CurrentEvent.GetNumBins();
+  for(int i=0; i<nbReset; i++){
     theResult.fEdepPerLayer_CurrentEvent.GetY()[i] = 0.;
   }
 
@@ -235,7 +246,8 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
   theResult.fEdepAbs2 += dum*dum;
 
   theResult.fEdepPerLayer.Add(&theResult.fEdepPerLayer_CurrentEvent);
-  for(int i=0; i<50; i++){
+  const int nbAcc = theResult.fEdepPerLayer_CurrentEvent.GetNumBins();
+  for(int i=0; i<nbAcc; i++){
     theResult.fEdepPerLayer_Acc[i].add(GET_VALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
     #if CODI_FORWARD
        theResult.fEdepPerLayer_AccD[i].add(GET_DOTVALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
@@ -246,7 +258,7 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
   #if CODI_FORWARD
   {
     double maxAbsDot = 0;
-    for(int i=0; i<50; i++){
+    for(int i=0; i<nbAcc; i++){
       double d = std::abs(GET_DOTVALUE(theResult.fEdepPerLayer_CurrentEvent.GetY()[i]));
       if(d > maxAbsDot) maxAbsDot = d;
     }
@@ -283,16 +295,29 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
   theResult.fNumStepsElPos2 += dum*dum;
 
   #ifdef CODI_REVERSE
-    for(int i=0; i<50; i++){
+    const int nbOut = theResult.fEdepPerLayer_CurrentEvent.GetNumBins();
+    for(int i=0; i<nbOut; i++){
        G4double::getTape().registerOutput(theResult.fEdepPerLayer_CurrentEvent.GetY()[i]);
     }
     G4double::getTape().setPassive();
-    for(int i=0; i<50; i++){
+    for(int i=0; i<nbOut; i++){
        theResult.fEdepPerLayer_CurrentEvent.GetY()[i].setGradient(theResult.barEdep[i]);
     }
     G4double::getTape().evaluate();
-    theResult.barThicknessAbsorber.add( theResult.pThicknessAbsorber.getGradient() );
-    theResult.barThicknessGap.add( theResult.pThicknessGap.getGradient() );
+    // accumulate the per-layer thickness gradients, and the legacy aggregates
+    // (sum over layers == derivative w.r.t. the shared uniform thickness).
+    const int nLayersR = (int)theResult.pAbsThick.size();
+    double sumAbs = 0., sumGap = 0.;
+    for(int i=0; i<nLayersR; i++){
+       const double ga = theResult.pAbsThick[i].getGradient();
+       const double gg = theResult.pGapThick[i].getGradient();
+       theResult.barAbsThick[i].add(ga);
+       theResult.barGapThick[i].add(gg);
+       sumAbs += ga;
+       sumGap += gg;
+    }
+    theResult.barThicknessAbsorber.add( sumAbs );
+    theResult.barThicknessGap.add( sumGap );
     theResult.barParticleEnergy.add( theResult.pParticleEnergy.getGradient() );
   #endif
 }

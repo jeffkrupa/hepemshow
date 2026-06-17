@@ -113,6 +113,31 @@ int main(int argc, char* argv[]) {
   theGeometry.SetGapThick(theInputParameters.fGeometry.fThicknessGap);
   theGeometry.SetCaloSizeYZ(theInputParameters.fGeometry.fSizeTransverse);
 
+  // optional per-layer overrides, applied after the uniform initializers above.
+  // precedence: uniform (-a/-g) -> full profile -> single-layer override.
+  if (!theInputParameters.fGeometry.fAbsProfile.empty()) {
+    if ((int)theInputParameters.fGeometry.fAbsProfile.size() != theGeometry.GetNumLayers()) {
+      std::cerr << "*** --abs-profile length (" << theInputParameters.fGeometry.fAbsProfile.size()
+                << ") must equal the number of layers (" << theGeometry.GetNumLayers() << ")" << std::endl;
+      return -1;
+    }
+    theGeometry.SetAbsProfile(theInputParameters.fGeometry.fAbsProfile);
+  }
+  if (!theInputParameters.fGeometry.fGapProfile.empty()) {
+    if ((int)theInputParameters.fGeometry.fGapProfile.size() != theGeometry.GetNumLayers()) {
+      std::cerr << "*** --gap-profile length (" << theInputParameters.fGeometry.fGapProfile.size()
+                << ") must equal the number of layers (" << theGeometry.GetNumLayers() << ")" << std::endl;
+      return -1;
+    }
+    theGeometry.SetGapProfile(theInputParameters.fGeometry.fGapProfile);
+  }
+  if (theInputParameters.fGeometry.fAbsLayerIdx >= 0) {
+    theGeometry.SetAbsThickLayer(theInputParameters.fGeometry.fAbsLayerIdx, theInputParameters.fGeometry.fAbsLayerVal);
+  }
+  if (theInputParameters.fGeometry.fGapLayerIdx >= 0) {
+    theGeometry.SetGapThickLayer(theInputParameters.fGeometry.fGapLayerIdx, theInputParameters.fGeometry.fGapLayerVal);
+  }
+
 
   // `PrimaryGenerator` is used to produce primary particle/track when starting a new event
   // here we construct the primary generator and set its configurable properties like
@@ -133,17 +158,22 @@ int main(int argc, char* argv[]) {
   Results theResult;
   theResult.fEdepPerLayer.ReSet("hist_Edep_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
   theResult.fEdepPerLayer_CurrentEvent.ReSet("hist_Edep_PerLayer_CurrentEvent", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
-  theResult.fEdepPerLayer_Acc.resize(50);
+  const int nLayers = theGeometry.GetNumLayers();
+  theResult.fEdepPerLayer_Acc.resize(nLayers);
   #ifdef CODI_FORWARD
-    theResult.fEdepPerLayer_AccD.resize(50);
+    theResult.fEdepPerLayer_AccD.resize(nLayers);
   #endif
   #ifdef CODI_REVERSE
-    theResult.barEdep.resize(50,0.);
-    for(int i=0; i<50; i++){
-       if(i<theInputParameters.barEdep.size()){
+    theResult.barEdep.resize(nLayers,0.);
+    for(int i=0; i<nLayers; i++){
+       if(i<(int)theInputParameters.barEdep.size()){
           theResult.barEdep[i] = theInputParameters.barEdep[i];
        }
     }
+    theResult.barAbsThick.resize(nLayers);
+    theResult.barGapThick.resize(nLayers);
+    theResult.pAbsThick.resize(nLayers);
+    theResult.pGapThick.resize(nLayers);
   #endif
   theResult.fGammaTrackLenghtPerLayer.ReSet("hist_GamTrackL_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
   theResult.fElPosTrackLenghtPerLayer.ReSet("hist_ElPosTrackL_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());

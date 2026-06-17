@@ -19,7 +19,8 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
   res.fEdepPerLayer.WriteToFile(false);
   std::ofstream edeps("edeps_" + std::to_string(seed));
   //std::ofstream edeps("edeps");
-  for(int i=0; i<50; i++){
+  const int nLayers = (int)res.fEdepPerLayer_Acc.size();
+  for(int i=0; i<nLayers; i++){
      edeps << std::setprecision(14) << res.fEdepPerLayer_Acc[i].getMean() << " " << res.fEdepPerLayer_Acc[i].getMeanSq();
      #if CODI_FORWARD
         edeps << " " << res.fEdepPerLayer_AccD[i].getMean() << " " << res.fEdepPerLayer_AccD[i].getMeanSq();
@@ -29,12 +30,29 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
   edeps.close();
 
   #ifdef CODI_REVERSE
+     // legacy aggregate format (kept for backward compatibility / regression checks):
+     // sum over layers == derivative w.r.t. the shared uniform thickness.
      std::ofstream barInputs("barInputs");
      barInputs << std::setprecision(14);
      barInputs << res.barThicknessAbsorber.getMean() << " " << res.barThicknessAbsorber.getVar() << "\n";
      barInputs << res.barThicknessGap.getMean() << " " << res.barThicknessGap.getVar() << "\n";
      barInputs << res.barParticleEnergy.getMean() << " " << res.barParticleEnergy.getVar() << "\n";
      barInputs.close();
+
+     // per-layer gradients: rows 0..N-1 -> d/d_absThick[i], rows N..2N-1 -> d/d_gapThick[i],
+     // final row -> d/d_energy. Each row is "mean var".
+     const int NL = (int)res.barAbsThick.size();
+     std::ofstream barPL("barInputsPerLayer");
+     barPL << std::setprecision(14);
+     barPL << "# N=" << NL << " ; rows 0..N-1: d/d_absThick[i] (mean var); rows N..2N-1: d/d_gapThick[i]; last row: d/d_energy\n";
+     for(int i=0; i<NL; i++){
+        barPL << res.barAbsThick[i].getMean() << " " << res.barAbsThick[i].getVar() << "\n";
+     }
+     for(int i=0; i<NL; i++){
+        barPL << res.barGapThick[i].getMean() << " " << res.barGapThick[i].getVar() << "\n";
+     }
+     barPL << res.barParticleEnergy.getMean() << " " << res.barParticleEnergy.getVar() << "\n";
+     barPL.close();
   #endif
 
 
