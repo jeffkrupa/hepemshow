@@ -1459,6 +1459,8 @@ void SteppingLoop::SteppingAction(Results& theResult, const G4HepEmTrack& theTra
       case 0: theResult.fPerEventRes.fEdepAbs += edep;
               break;
       case 1: theResult.fPerEventRes.fEdepGap += edep;
+              // per-layer GAP energy: accumulate only deposits in the gap region
+              theResult.fEdepGapPerLayer_CurrentEvent.Fill(indxLayer, edep);
               break;
       default: //
               break;

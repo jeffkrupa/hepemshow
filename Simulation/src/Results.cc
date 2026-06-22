@@ -13,6 +13,7 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
   // for the histograms, bring them to be mean per event and write
   const G4double norm = numEvents > 0 ? 1.0/numEvents : 1.0;
   res.fEdepPerLayer.Scale(norm);
+  res.fEdepGapPerLayer.Scale(norm);
   res.fGammaTrackLenghtPerLayer.Scale(norm);
   res.fElPosTrackLenghtPerLayer.Scale(norm);
 
@@ -28,6 +29,19 @@ void WriteResults(struct Results& res, int numEvents, int seed) {
      edeps << "\n";
   }
   edeps.close();
+
+  // per-layer GAP energy (sampled signal), same column layout as edeps_<seed>:
+  // "mean meanSq [mean_dot meanSq_dot]" per layer. Absorber energy = combined - gap.
+  std::ofstream edepsGap("edeps_gap_" + std::to_string(seed));
+  const int nLayersGap = (int)res.fEdepGapPerLayer_Acc.size();
+  for(int i=0; i<nLayersGap; i++){
+     edepsGap << std::setprecision(14) << res.fEdepGapPerLayer_Acc[i].getMean() << " " << res.fEdepGapPerLayer_Acc[i].getMeanSq();
+     #if CODI_FORWARD
+        edepsGap << " " << res.fEdepGapPerLayer_AccD[i].getMean() << " " << res.fEdepGapPerLayer_AccD[i].getMeanSq();
+     #endif
+     edepsGap << "\n";
+  }
+  edepsGap.close();
 
   #ifdef CODI_REVERSE
      // legacy aggregate format (kept for backward compatibility / regression checks):

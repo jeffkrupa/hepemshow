@@ -70,11 +70,17 @@ struct Results {
   Hist fEdepPerLayer;              ///< mean energy deposit per-layer histogram
   Hist fEdepPerLayer_CurrentEvent;       ///< mean energy deposit per-layer histogram, current event
   std::vector<Accumulator<double>> fEdepPerLayer_Acc; ///< computes statistical properties of the energy deposit per layer per event
+  // --- Per-layer GAP energy (sampled signal), parallel to the combined per-layer energy above ---
+  Hist fEdepGapPerLayer;                 ///< mean GAP energy deposit per-layer histogram
+  Hist fEdepGapPerLayer_CurrentEvent;    ///< GAP energy deposit per-layer histogram, current event
+  std::vector<Accumulator<double>> fEdepGapPerLayer_Acc; ///< statistical properties of the per-layer GAP energy deposit per event
   #ifdef CODI_FORWARD
     std::vector<Accumulator<double>> fEdepPerLayer_AccD; ///< computes statistical properties of the dot value of the energy deposit per layer per event
+    std::vector<Accumulator<double>> fEdepGapPerLayer_AccD; ///< dot-value statistics of the per-layer GAP energy deposit per event
   #endif
   #ifdef CODI_REVERSE
     std::vector<double> barEdep; ///< Bar values of the edeps, to be set in the beginning.
+    std::vector<double> barEdepGap; ///< Bar values of the per-layer GAP edeps, to be set in the beginning.
     Accumulator<double> barThicknessAbsorber, barThicknessGap, barParticleEnergy; ///< Aggregate (summed-over-layers) bar values of the thicknesses and energy (legacy format).
     G4double pParticleEnergy; ///< Copy of the energy variable used by the simulation, used as an AD input.
     std::vector<G4double> pAbsThick, pGapThick; ///< Per-layer absorber/gap thickness AD inputs (registered each event).

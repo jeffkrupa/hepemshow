@@ -235,6 +235,7 @@ void EventLoop::BeginOfEventAction(Results& theResult, int eventID, const G4HepE
   const int nbReset = theResult.fEdepPerLayer_CurrentEvent.GetNumBins();
   for(int i=0; i<nbReset; i++){
     theResult.fEdepPerLayer_CurrentEvent.GetY()[i] = 0.;
+    theResult.fEdepGapPerLayer_CurrentEvent.GetY()[i] = 0.;
   }
 
 }
@@ -246,11 +247,14 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
   theResult.fEdepAbs2 += dum*dum;
 
   theResult.fEdepPerLayer.Add(&theResult.fEdepPerLayer_CurrentEvent);
+  theResult.fEdepGapPerLayer.Add(&theResult.fEdepGapPerLayer_CurrentEvent);
   const int nbAcc = theResult.fEdepPerLayer_CurrentEvent.GetNumBins();
   for(int i=0; i<nbAcc; i++){
     theResult.fEdepPerLayer_Acc[i].add(GET_VALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
+    theResult.fEdepGapPerLayer_Acc[i].add(GET_VALUE((theResult.fEdepGapPerLayer_CurrentEvent.GetY()[i])));
     #if CODI_FORWARD
        theResult.fEdepPerLayer_AccD[i].add(GET_DOTVALUE((theResult.fEdepPerLayer_CurrentEvent.GetY()[i])));
+       theResult.fEdepGapPerLayer_AccD[i].add(GET_DOTVALUE((theResult.fEdepGapPerLayer_CurrentEvent.GetY()[i])));
     #endif
   }
 
@@ -299,9 +303,18 @@ void EventLoop::EndOfEventAction(Results& theResult, int eventID) {
     for(int i=0; i<nbOut; i++){
        G4double::getTape().registerOutput(theResult.fEdepPerLayer_CurrentEvent.GetY()[i]);
     }
+    // also register the per-layer GAP energy outputs so their adjoints can be seeded
+    for(int i=0; i<nbOut; i++){
+       G4double::getTape().registerOutput(theResult.fEdepGapPerLayer_CurrentEvent.GetY()[i]);
+    }
     G4double::getTape().setPassive();
     for(int i=0; i<nbOut; i++){
        theResult.fEdepPerLayer_CurrentEvent.GetY()[i].setGradient(theResult.barEdep[i]);
+    }
+    // seed the per-layer GAP energy adjoints (independent of the combined seeds);
+    // gradients of both flow through the same design-parameter inputs below.
+    for(int i=0; i<nbOut; i++){
+       theResult.fEdepGapPerLayer_CurrentEvent.GetY()[i].setGradient(theResult.barEdepGap[i]);
     }
     G4double::getTape().evaluate();
     // accumulate the per-layer thickness gradients, and the legacy aggregates

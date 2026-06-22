@@ -158,16 +158,27 @@ int main(int argc, char* argv[]) {
   Results theResult;
   theResult.fEdepPerLayer.ReSet("hist_Edep_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
   theResult.fEdepPerLayer_CurrentEvent.ReSet("hist_Edep_PerLayer_CurrentEvent", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
+  // per-layer GAP energy histograms (parallel to the combined per-layer energy above)
+  theResult.fEdepGapPerLayer.ReSet("hist_EdepGap_PerLayer", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
+  theResult.fEdepGapPerLayer_CurrentEvent.ReSet("hist_EdepGap_PerLayer_CurrentEvent", 0, theGeometry.GetNumLayers(), theGeometry.GetNumLayers());
   const int nLayers = theGeometry.GetNumLayers();
   theResult.fEdepPerLayer_Acc.resize(nLayers);
+  theResult.fEdepGapPerLayer_Acc.resize(nLayers);
   #ifdef CODI_FORWARD
     theResult.fEdepPerLayer_AccD.resize(nLayers);
+    theResult.fEdepGapPerLayer_AccD.resize(nLayers);
   #endif
   #ifdef CODI_REVERSE
     theResult.barEdep.resize(nLayers,0.);
     for(int i=0; i<nLayers; i++){
        if(i<(int)theInputParameters.barEdep.size()){
           theResult.barEdep[i] = theInputParameters.barEdep[i];
+       }
+    }
+    theResult.barEdepGap.resize(nLayers,0.);
+    for(int i=0; i<nLayers; i++){
+       if(i<(int)theInputParameters.barEdepGap.size()){
+          theResult.barEdepGap[i] = theInputParameters.barEdepGap[i];
        }
     }
     theResult.barAbsThick.resize(nLayers);

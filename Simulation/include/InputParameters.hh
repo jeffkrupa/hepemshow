@@ -132,6 +132,7 @@ struct InputParameters {
   G4double fUmscDispRadFloor;       ///< derivative-only floor for UMSC displacement sqrt radicand derivative
   #ifdef CODI_REVERSE
     std::vector<double> barEdep;     ///< Bar values of the energy depositions
+    std::vector<double> barEdepGap;  ///< Bar values of the per-layer GAP energy depositions
   #endif
 };
 
@@ -237,6 +238,9 @@ static struct option options[] = {
   {"gap-profile          (per-layer gap thicknesses v0:v1:...:v{N-1} in [mm]; length must equal #layers)"     , required_argument, 0, 1002},
   {"abs-layer            (override one layer's absorber thickness: i:value[:dot])"                            , required_argument, 0, 1003},
   {"gap-layer            (override one layer's gap thickness: i:value[:dot])"                                 , required_argument, 0, 1004},
+  #ifdef CODI_REVERSE
+    {"bar-gap              (reverse-AD bar values of per-layer GAP edeps v0:v1:...:v{N-1}, [MeV]) - default: 0:0:...:0", required_argument, 0, 1005},
+  #endif
   {"help"                                                                                    , no_argument      , 0, 'h'},
   {0, 0, 0, 0}
 };
@@ -340,6 +344,14 @@ void GetOpt(int argc, char *argv[], InputParameters& param) {
           if (p.size() >= 3) SET_DOTVALUE(val, p[2]);
        #endif
        param.fGeometry.fGapLayerVal = val;
+       break;
+    }
+    case 1005: { // --bar-gap : reverse-AD bar values of per-layer GAP edeps
+       #ifdef CODI_REVERSE
+          param.barEdepGap = stod_array(optarg);
+       #else
+          std::cerr << "Ignoring --bar-gap argument, as this is not a reverse-AD build." << std::endl;
+       #endif
        break;
     }
 
