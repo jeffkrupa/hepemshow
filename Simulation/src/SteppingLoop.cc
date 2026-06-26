@@ -43,7 +43,7 @@ namespace {
 }
 
 bool outputall = (std::getenv("HEPEMSHOW_OUTPUT_ALL") && std::string(std::getenv("HEPEMSHOW_OUTPUT_ALL")) != "0");
-bool outputboundarylayers = false;
+bool outputboundarylayers = (std::getenv("HEPEMSHOW_OUTPUT_ALL") && std::string(std::getenv("HEPEMSHOW_OUTPUT_ALL")) != "0");
 bool outputpingpongtracks = false;
 bool outputvx = false;
 ;
